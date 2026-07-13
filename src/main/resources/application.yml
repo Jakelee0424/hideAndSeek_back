@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: game3d-server
+  datasource:
+    url: jdbc:h2:mem:game3d;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+server:
+  port: 8080
+
+game:
+  # 프론트 LocalPlayer.tsx의 SPEED와 반드시 일치 (권위 서버 검증용)
+  speed: 6.0
+  # 틱 주기(ms). 20 tick/s = 50ms
+  tick-ms: 50
+  # 맵 경계(반지름). Ground 100x100 평면 → ±50
+  half-extent: 50.0
+  # 입력 무응답 시 플레이어 정지로 간주하는 시간(ms)
+  input-timeout-ms: 500
+
+# CORS/WS 허용 오리진(프론트)
+cors:
+  allowed-origins: "http://localhost:3000"
