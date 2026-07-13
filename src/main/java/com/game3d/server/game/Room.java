@@ -64,7 +64,6 @@ public class Room {
     public void tick(long nowMs) {
         double dt = props.tickSeconds();
         double speed = props.speed();
-        double bound = props.halfExtent();
         long timeout = props.inputTimeoutMs();
 
         for (Player p : players.values()) {
@@ -81,9 +80,10 @@ public class Room {
             p.x += mx * speed * dt;
             p.z += mz * speed * dt;
 
-            // 맵 경계 클램프.
-            p.x = clamp(p.x, -bound, bound);
-            p.z = clamp(p.z, -bound, bound);
+            // 벽/장애물 충돌 해석(문은 해결 시 통과). 프론트 예측과 동일 로직.
+            double[] r = Collision.resolve(p.x, p.z, solvedIds);
+            p.x = r[0];
+            p.z = r[1];
 
             // 회전은 시각용 → 클라 값 수용.
             p.rotationY = p.desiredRotationY();
@@ -91,7 +91,6 @@ public class Room {
         tick++;
     }
 
-    /** 현재 상태의 불변 스냅샷. */
     /** 퍼즐 해결 기록(협동). 방 생명주기 동안 유지된다. */
     public void markSolved(String objectId) {
         if (objectId != null && !objectId.isBlank()) {
@@ -105,9 +104,5 @@ public class Room {
             list.add(p.snapshot());
         }
         return new WorldSnapshot(tick, list, new ArrayList<>(solvedIds));
-    }
-
-    private static double clamp(double v, double lo, double hi) {
-        return v < lo ? lo : Math.min(v, hi);
     }
 }
