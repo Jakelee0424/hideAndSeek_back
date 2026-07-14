@@ -1,8 +1,8 @@
 package com.game3d.server.game;
 
-import com.game3d.server.dto.PlayerState;
+import com.game3d.server.dto.PlayerTick;
+import com.game3d.server.dto.RosterEntry;
 import com.game3d.server.dto.Role;
-import com.game3d.server.dto.Vec3;
 
 /**
  * 룸 안의 가변(hot) 플레이어 상태. DB가 아닌 메모리에 둔다.
@@ -63,7 +63,17 @@ public class Player {
         return desiredRotationY;
     }
 
-    PlayerState snapshot() {
-        return new PlayerState(id, nick, new Vec3(x, y, z), rotationY, role);
+    /** 매 tick 실리는 경량 상태. 위치는 2자리, 회전은 3자리로 반올림해 페이로드를 줄인다. */
+    PlayerTick tickState() {
+        return new PlayerTick(id, round(x, 100.0), round(z, 100.0), round(rotationY, 1000.0));
+    }
+
+    /** 로스터 변경(입·퇴장) 시에만 실리는 정적 정보. */
+    RosterEntry rosterEntry() {
+        return new RosterEntry(id, nick);
+    }
+
+    private static double round(double v, double factor) {
+        return Math.round(v * factor) / factor;
     }
 }
