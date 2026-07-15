@@ -1,6 +1,7 @@
 package com.game3d.server.game;
 
-import com.game3d.server.dto.PlayerState;
+import com.game3d.server.dto.PlayerTick;
+import com.game3d.server.dto.RosterEntry;
 import com.game3d.server.dto.WorldSnapshot;
 
 import java.util.ArrayList;
@@ -8,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 하나의 게임 룸. 플레이어 hot state를 메모리에 격리 보관하고, tick마다 위치를 확정한다.
@@ -24,6 +26,9 @@ public class Room {
     private final Map<String, Player> players = new ConcurrentHashMap<>();
     // 해결된 퍼즐 오브젝트 id(협동 동기화). 컨트롤러 스레드에서 추가, 루프 스레드에서 스냅샷 읽기.
     private final Set<String> solvedIds = ConcurrentHashMap.newKeySet();
+    // 로스터(id·nick) 변경 여부. 입·퇴장 스레드에서 set, 루프 스레드에서 getAndSet.
+    // 초기 true → 첫 스냅샷에 로스터를 한 번 실어 클라가 닉네임을 받게 한다.
+    private final AtomicBoolean rosterDirty = new AtomicBoolean(true);
     private long tick;
 
     /** 봇 브레인의 LLM 느린 층. null이면 스크립트로만 돈다. */
@@ -65,6 +70,8 @@ public class Room {
             return new Player(key, nick, sx, sz);
         });
         spawnBot();
+        // 봇까지 넣은 뒤에 세워야 로스터에 봇 닉("AI")이 함께 실린다.
+        rosterDirty.set(true); // 다음 스냅샷에 로스터 1회 재전송
     }
 
     /** AI 봇 투입(멱등). 첫 사람이 들어오면 자동으로 같이 스폰된다. */
@@ -74,7 +81,9 @@ public class Room {
 
     /** 이탈. */
     public void leave(String id) {
-        players.remove(id);
+        if (players.remove(id) != null) {
+            rosterDirty.set(true);
+        }
     }
 
     /** 이동 의도 반영(권위 서버: 좌표가 아닌 방향만 받는다). */
@@ -140,10 +149,18 @@ public class Room {
     }
 
     public WorldSnapshot snapshot() {
-        List<PlayerState> list = new ArrayList<>(players.size());
+        List<PlayerTick> states = new ArrayList<>(players.size());
         for (Player p : players.values()) {
-            list.add(p.snapshot());
+            states.add(p.tickState());
         }
-        return new WorldSnapshot(tick, list, new ArrayList<>(solvedIds));
+        // 로스터는 변경됐을 때만 싣는다(그 외 null → JSON 생략).
+        List<RosterEntry> roster = null;
+        if (rosterDirty.getAndSet(false)) {
+            roster = new ArrayList<>(players.size());
+            for (Player p : players.values()) {
+                roster.add(p.rosterEntry());
+            }
+        }
+        return new WorldSnapshot(tick, states, roster, new ArrayList<>(solvedIds));
     }
 }
