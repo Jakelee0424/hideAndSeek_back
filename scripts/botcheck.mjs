@@ -151,7 +151,12 @@ function report() {
   const f = (v) => (v === Infinity ? '  —  ' : `${v.toFixed(2)}m`);
   console.log('\n──────── 결과 ────────');
   console.log(`스냅샷 ${snapshots} · 봇 관측 ${botSeen}`);
-  console.log(`로스터: ${roster ? roster.map((r) => `${r.id}(${r.nick})`).join(', ') : '못 받음 ⚠️'}`);
+  console.log(`로스터: ${roster ? roster.map((r) => `${r.id}(${r.nick})${r.bot ? ' [bot]' : ''}`).join(', ') : '못 받음 ⚠️'}`);
+  // 봇이 bot 플래그 없이 로스터에 실리면 프론트가 봇을 방장으로 뽑아 사람에게 시작 버튼이 사라진다.
+  const botEntry = roster?.find((r) => r.id === BOT);
+  if (botEntry && botEntry.bot !== true) {
+    console.log('⚠️ 로스터의 봇에 bot=true가 없다 — 프론트 방장 선출이 봇을 사람으로 오인한다.');
+  }
   console.log('\n봇의 최소 접근 거리:');
   for (const p of POIS) {
     console.log(`  ${p.id.padEnd(10)} ${f(min[p.id])}   ${p.solvable ? '(스크립트도 감)' : '★ LLM만 감'}`);

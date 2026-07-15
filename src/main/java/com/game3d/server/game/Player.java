@@ -84,7 +84,7 @@ public class Player {
 
     /** 로스터 변경(입·퇴장) 시에만 실리는 정적 정보. */
     RosterEntry rosterEntry() {
-        return new RosterEntry(id, nick);
+        return new RosterEntry(id, nick, bot);
     }
 
     private static double round(double v, double factor) {
