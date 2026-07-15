@@ -37,17 +37,19 @@ public class Player {
     private volatile long lastInputAtMs;
     private volatile long lastSeq = -1;
 
+    /** 사람. */
     Player(String id, String nick, double x, double z) {
-        this(id, nick, x, z, false);
+        this(id, nick, x, z, null);
     }
 
-    Player(String id, String nick, double x, double z, boolean bot) {
+    /** brain이 있으면 봇, null이면 사람. 브레인은 룸이 만들어 넘긴다(플래너 주입 때문). */
+    Player(String id, String nick, double x, double z, BotBrain brain) {
         this.id = id;
         this.nick = nick;
         this.x = x;
         this.z = z;
-        this.bot = bot;
-        this.brain = bot ? new BotBrain() : null;
+        this.bot = brain != null;
+        this.brain = brain;
     }
 
     /** 입력 수신 스레드에서 호출. 오래된(seq 역전) 입력은 버린다. */

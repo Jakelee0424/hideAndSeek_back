@@ -26,9 +26,15 @@ public class Room {
     private final Set<String> solvedIds = ConcurrentHashMap.newKeySet();
     private long tick;
 
-    Room(String roomId, GameProperties props) {
+    /** 봇 브레인의 LLM 느린 층. null이면 스크립트로만 돈다. */
+    private final BotPlanner llm;
+    private final long planIntervalMs;
+
+    Room(String roomId, GameProperties props, BotPlanner llm, long planIntervalMs) {
         this.roomId = roomId;
         this.props = props;
+        this.llm = llm;
+        this.planIntervalMs = planIntervalMs;
     }
 
     public String roomId() {
@@ -63,7 +69,7 @@ public class Room {
 
     /** AI 봇 투입(멱등). 첫 사람이 들어오면 자동으로 같이 스폰된다. */
     public void spawnBot() {
-        players.computeIfAbsent(BOT_ID, key -> new Player(key, BOT_NICK, 0, 0, true));
+        players.computeIfAbsent(BOT_ID, key -> new Player(key, BOT_NICK, 0, 0, new BotBrain(llm, planIntervalMs)));
     }
 
     /** 이탈. */
@@ -90,7 +96,7 @@ public class Room {
             double mz;
             if (p.bot) {
                 // 봇: STOMP 입력 대신 브레인이 이동 의도를 만든다. 이하 이동·충돌은 사람과 공유.
-                double[] mv = p.brain.steer(p.x, p.z, solvedIds);
+                double[] mv = p.brain.steer(p, players.values(), solvedIds, nowMs);
                 mx = mv[0];
                 mz = mv[1];
             } else {

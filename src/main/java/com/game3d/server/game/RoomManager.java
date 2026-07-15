@@ -1,5 +1,7 @@
 package com.game3d.server.game;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.Collection;
@@ -10,15 +12,27 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class RoomManager {
 
+    private static final Logger log = LoggerFactory.getLogger(RoomManager.class);
+
     private final GameProperties props;
     private final Map<String, Room> rooms = new ConcurrentHashMap<>();
 
-    public RoomManager(GameProperties props) {
+    /** null이면 봇이 스크립트로만 돈다. */
+    private final BotPlanner llm;
+    private final long planIntervalMs;
+
+    public RoomManager(GameProperties props, BotProperties botProps, GroqBotPlanner groq) {
         this.props = props;
+        BotProperties.Llm cfg = botProps.llm();
+        // 키가 비었는데 켜져 있으면 매 주기 401을 맞는다. 그럴 바엔 아예 스크립트로 돌린다.
+        boolean on = cfg.enabled() && cfg.apiKey() != null && !cfg.apiKey().isBlank();
+        this.llm = on ? groq : null;
+        this.planIntervalMs = cfg.intervalMs();
+        log.info("AI 봇 느린 층: {}", on ? cfg.model() + " (" + cfg.intervalMs() + "ms 주기)" : "스크립트 전용");
     }
 
     public Room getOrCreate(String roomId) {
-        return rooms.computeIfAbsent(roomId, id -> new Room(id, props));
+        return rooms.computeIfAbsent(roomId, id -> new Room(id, props, llm, planIntervalMs));
     }
 
     public Room get(String roomId) {
