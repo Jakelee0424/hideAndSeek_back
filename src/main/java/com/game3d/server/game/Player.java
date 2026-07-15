@@ -16,6 +16,12 @@ public class Player {
     final String id;
     final String nick;
 
+    /** AI 봇 여부. 봇은 STOMP 입력 대신 브레인이 이동 의도를 채운다. */
+    final boolean bot;
+
+    /** 봇일 때만 존재(사람은 null). */
+    final BotBrain brain;
+
     // 위치/회전: 루프 스레드만 쓴다.
     double x;
     double y = SPAWN_Y;
@@ -32,10 +38,16 @@ public class Player {
     private volatile long lastSeq = -1;
 
     Player(String id, String nick, double x, double z) {
+        this(id, nick, x, z, false);
+    }
+
+    Player(String id, String nick, double x, double z, boolean bot) {
         this.id = id;
         this.nick = nick;
         this.x = x;
         this.z = z;
+        this.bot = bot;
+        this.brain = bot ? new BotBrain() : null;
     }
 
     /** 입력 수신 스레드에서 호출. 오래된(seq 역전) 입력은 버린다. */

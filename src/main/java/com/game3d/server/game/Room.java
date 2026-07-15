@@ -15,6 +15,10 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class Room {
 
+    /** AI 봇의 고정 id/닉. 스냅샷엔 일반 원격 플레이어처럼 실린다(프론트 무변경). */
+    private static final String BOT_ID = "bot-1";
+    private static final String BOT_NICK = "AI";
+
     private final String roomId;
     private final GameProperties props;
     private final Map<String, Player> players = new ConcurrentHashMap<>();
@@ -31,8 +35,17 @@ public class Room {
         return roomId;
     }
 
+    /**
+     * 사람이 아무도 없으면 빈 방. 봇은 인원으로 세지 않는다.
+     * (봇을 세면 봇만 남은 방이 영영 안 치워지고 루프에 계속 남는다)
+     */
     public boolean isEmpty() {
-        return players.isEmpty();
+        for (Player p : players.values()) {
+            if (!p.bot) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** 입장(멱등). 이미 있으면 닉네임만 갱신. 스폰 위치는 원 위에 분산 배치. */
@@ -45,6 +58,12 @@ public class Room {
             double sz = Math.sin(angle) * r;
             return new Player(key, nick, sx, sz);
         });
+        spawnBot();
+    }
+
+    /** AI 봇 투입(멱등). 첫 사람이 들어오면 자동으로 같이 스폰된다. */
+    public void spawnBot() {
+        players.computeIfAbsent(BOT_ID, key -> new Player(key, BOT_NICK, 0, 0, true));
     }
 
     /** 이탈. */
@@ -67,8 +86,17 @@ public class Room {
         long timeout = props.inputTimeoutMs();
 
         for (Player p : players.values()) {
-            double mx = p.inputMoveX(nowMs, timeout);
-            double mz = p.inputMoveZ(nowMs, timeout);
+            double mx;
+            double mz;
+            if (p.bot) {
+                // 봇: STOMP 입력 대신 브레인이 이동 의도를 만든다. 이하 이동·충돌은 사람과 공유.
+                double[] mv = p.brain.steer(p.x, p.z, solvedIds);
+                mx = mv[0];
+                mz = mv[1];
+            } else {
+                mx = p.inputMoveX(nowMs, timeout);
+                mz = p.inputMoveZ(nowMs, timeout);
+            }
 
             // 클라 입력 불신: 이동 벡터 크기를 1로 클램프(속도 핵 방지).
             double len = Math.hypot(mx, mz);
@@ -85,8 +113,15 @@ public class Room {
             p.x = r[0];
             p.z = r[1];
 
-            // 회전은 시각용 → 클라 값 수용.
-            p.rotationY = p.desiredRotationY();
+            if (p.bot) {
+                // 봇은 진행 방향을 본다(프론트 LocalPlayer와 같은 규약). 정지 중엔 마지막 회전 유지.
+                if (len > 1e-6) {
+                    p.rotationY = Math.atan2(mx, mz);
+                }
+            } else {
+                // 회전은 시각용 → 클라 값 수용.
+                p.rotationY = p.desiredRotationY();
+            }
         }
         tick++;
     }
