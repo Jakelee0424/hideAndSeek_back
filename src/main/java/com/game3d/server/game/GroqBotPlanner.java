@@ -115,7 +115,9 @@ class GroqBotPlanner implements BotPlanner {
         ObjectNode body = json.createObjectNode();
         body.put("model", cfg.model());
         body.put("temperature", 0.3);
-        body.put("max_tokens", 120);
+        // gpt-oss는 추론 모델이라 답 앞에 추론 토큰을 쓴다. 120으로 조이면 JSON을 못 끝내고
+        // Groq이 400 json_validate_failed를 뱉는다(실측 4회 중 1회). 실제 과금/한도는 쓴 만큼이니 넉넉히.
+        body.put("max_tokens", 400);
         body.set("response_format", json.createObjectNode().put("type", "json_object"));
         body.set("messages", json.createArrayNode().add(sys).add(user));
         return json.writeValueAsString(body);
