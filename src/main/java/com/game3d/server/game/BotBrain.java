@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -47,8 +48,16 @@ final class BotBrain {
     private double targetX;
     private double targetZ;
 
-    /** 방금 도착한 목표. 같은 곳에 계속 붙어 있지 않도록 다음 선택에서 제외한다. */
-    private String lastArrivedId;
+    /**
+     * 이미 다녀온 POI(도착 순). 봇의 "기억"이다.
+     *
+     * 직전 한 곳만 기억하면, 해결 가능한 지점이 둘일 때 직전을 뺀 나머지가 항상 반대쪽 하나라
+     * 둘 사이를 영원히 왕복한다. 또 이 기록을 프롬프트에 주지 않으면 모델은 매 호출을 첫 판단으로
+     * 여겨 같은 쪽지를 계속 다시 고른다(2026-07 실측: LLM 계획 5/5가 같은 쪽지).
+     *
+     * 루프 스레드만 쓴다(steer). 플래너로 넘길 땐 불변 사본을 만든다.
+     */
+    private final Set<String> visited = new LinkedHashSet<>();
 
     BotBrain(BotPlanner llm, long intervalMs) {
         this.llm = llm;
@@ -70,11 +79,11 @@ final class BotBrain {
                 maybePlan(self, players, solved, nowMs);
                 return STOP;
             }
-            lastArrivedId = g.targetId();
+            visited.add(g.targetId()); // 다녀온 곳으로 기억 → 다시 고르지 않는다
             hasTarget = false; // 도착 → 다음 목표를 고른다
         }
         if (!hasTarget) {
-            reconsider(self, solved);
+            reconsider(self, players, solved);
             hasTarget = resolveTarget(goal, players, solved);
         }
 
@@ -124,12 +133,40 @@ final class BotBrain {
     }
 
     /**
-     * 스크립트 느린 층: 방금 도착한 곳을 뺀 안 풀린 퍼즐 중 최근접.
+     * 스크립트 느린 층: 아직 안 가본 안 풀린 퍼즐 중 최근접.
      * LLM이 꺼져 있거나 아직 응답이 없을 때 봇을 계속 움직이게 하는 바닥이다.
+     *
+     * 다 가봤으면 사람을 따라간다. 봇은 퍼즐을 못 푸니, 안 가본 곳이 없다는 건 사람이 뭔가 풀기
+     * 전까지 새로 할 일이 없다는 뜻이다. 여기서 멈춰 세우면 봇이 벽처럼 서 있게 된다.
+     * 사람이 퍼즐을 풀면 solved가 바뀌고, 그때 아래 nearestUnsolved가 다시 후보를 낸다.
      */
-    private void reconsider(Player self, Set<String> solved) {
-        Interactables.Poi next = Interactables.nearestUnsolved(self.x, self.z, solved, lastArrivedId);
-        goal = next == null ? Goal.IDLE : Goal.gotoPuzzle(next.id());
+    private void reconsider(Player self, Collection<Player> players, Set<String> solved) {
+        Interactables.Poi next = Interactables.nearestUnsolved(self.x, self.z, solved, visited);
+        if (next != null) {
+            goal = Goal.gotoPuzzle(next.id());
+            return;
+        }
+        Player mate = nearestHuman(self, players);
+        goal = mate == null ? Goal.IDLE : Goal.followPlayer(mate.id);
+    }
+
+    /** 같은 방의 사람 중 최근접. 아무도 없으면 null(봇만 남은 방). */
+    private static Player nearestHuman(Player self, Collection<Player> players) {
+        Player best = null;
+        double bestD2 = Double.MAX_VALUE;
+        for (Player p : players) {
+            if (p.bot) {
+                continue;
+            }
+            double dx = p.x - self.x;
+            double dz = p.z - self.z;
+            double d2 = dx * dx + dz * dz;
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                best = p;
+            }
+        }
+        return best;
     }
 
     /** LLM 느린 층: 주기가 됐고 앞선 호출이 끝났을 때만. tick 스레드는 여기서 절대 기다리지 않는다. */
@@ -169,10 +206,16 @@ final class BotBrain {
                 mates.add(new BotContext.MateView(p.id, p.nick, p.x, p.z));
             }
         }
-        return new BotContext(self.x, self.z, pois, mates, lastArrivedId);
+        return new BotContext(self.x, self.z, pois, mates, List.copyOf(visited));
     }
 
-    /** 모델이 낸 목표가 실재하는지 검증. 스냅샷 기준이라 살짝 낡을 수 있지만 스레드 안전하다. */
+    /**
+     * 모델이 낸 목표가 실재하는지 검증. 스냅샷 기준이라 살짝 낡을 수 있지만 스레드 안전하다.
+     *
+     * 이미 읽은 쪽지를 다시 고르는 건 무효로 본다. 프롬프트에 방문 기록을 넣어도 모델이 무시하고
+     * 같은 쪽지를 계속 내놓기 때문에(2026-07 실측), 말로 부탁하는 대신 여기서 잘라낸다.
+     * 무효 계획은 조용히 버려지고 스크립트 목표가 그대로 산다 — 우아한 열화가 여기서도 유지된다.
+     */
     private static boolean valid(Goal g, BotContext ctx) {
         if (g.targetId() == null) {
             return g.action() == Goal.Action.IDLE;
@@ -182,7 +225,7 @@ final class BotBrain {
             case IDLE -> true;
             case GOTO_PUZZLE -> p != null && p.solvable()
                     && ctx.pois().stream().anyMatch(v -> v.id().equals(p.id()) && !v.solved());
-            case GOTO_NOTE -> p != null && !p.solvable();
+            case GOTO_NOTE -> p != null && !p.solvable() && !ctx.visitedIds().contains(p.id());
             case FOLLOW_PLAYER -> ctx.mates().stream().anyMatch(m -> m.id().equals(g.targetId()));
         };
     }

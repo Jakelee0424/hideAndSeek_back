@@ -24,4 +24,8 @@ record Goal(Action action, String targetId) {
     static Goal gotoPuzzle(String puzzleId) {
         return new Goal(Action.GOTO_PUZZLE, puzzleId);
     }
+
+    static Goal followPlayer(String playerId) {
+        return new Goal(Action.FOLLOW_PLAYER, playerId);
+    }
 }
