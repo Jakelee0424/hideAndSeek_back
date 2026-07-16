@@ -125,9 +125,18 @@ class GroqBotPlanner implements BotPlanner {
         ObjectNode body = json.createObjectNode();
         body.put("model", cfg.model());
         body.put("temperature", 0.3);
-        // gpt-oss는 추론 모델이라 답 앞에 추론 토큰을 쓴다. 120으로 조이면 JSON을 못 끝내고
-        // Groq이 400 json_validate_failed를 뱉는다(실측 4회 중 1회). 실제 과금/한도는 쓴 만큼이니 넉넉히.
-        body.put("max_tokens", 400);
+        // gpt-oss는 추론 모델이라 답 앞에 추론 토큰을 쓴다. 조이면 JSON을 못 끝내고 Groq이
+        // 400 json_validate_failed를 뱉는다. 상한일 뿐이라 실제 한도/과금은 쓴 만큼만 잡힌다 → 넉넉히 준다.
+        //
+        // 400이던 이력: 규칙 3줄 시절엔 completion이 110~118이라 400도 충분했다. 규칙을 5줄로 늘리고
+        // visitedIds를 넣자 completion이 207~365로 3배가 되며 상한에 닿아 400이 재발했다(실측 4회 중 3회).
+        // 1000이면 실측 0/6 실패(completion 220~440).
+        //
+        // ⚠️ 프롬프트를 건드리면 추론 토큰이 같이 움직인다. 늘린 뒤엔 반드시 실패율을 다시 잴 것.
+        //    "규칙을 한 줄로 압축하면 토큰이 줄겠지"는 틀렸다 — 실측 6/6 실패로 오히려 악화됐다.
+        // ⚠️ TPM 한도(8,000)에 유의. 6초 주기 = 10콜/분인데 total이 최대 891이라 8,910까지 갈 수 있다.
+        //    모델을 나눠 쓰면(라운드로빈) 모델별로 한도가 따로 걸려 해소된다. 미착수.
+        body.put("max_tokens", 1000);
         body.set("response_format", json.createObjectNode().put("type", "json_object"));
         body.set("messages", json.createArrayNode().add(sys).add(user));
         return json.writeValueAsString(body);
