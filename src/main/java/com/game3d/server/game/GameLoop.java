@@ -32,7 +32,7 @@ public class GameLoop {
                 continue;
             }
             room.tick(now);
-            WorldSnapshot snap = room.snapshot();
+            WorldSnapshot snap = room.snapshot(now);
             broker.convertAndSend("/topic/rooms/" + room.roomId() + "/state", snap);
         }
     }

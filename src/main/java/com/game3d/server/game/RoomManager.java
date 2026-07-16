@@ -15,24 +15,30 @@ public class RoomManager {
     private static final Logger log = LoggerFactory.getLogger(RoomManager.class);
 
     private final GameProperties props;
+    private final PhaseProperties phaseProps;
     private final Map<String, Room> rooms = new ConcurrentHashMap<>();
 
     /** null이면 봇이 스크립트로만 돈다. */
     private final BotPlanner llm;
     private final long planIntervalMs;
 
-    public RoomManager(GameProperties props, BotProperties botProps, GroqBotPlanner groq) {
+    public RoomManager(GameProperties props, PhaseProperties phaseProps, BotProperties botProps, GroqBotPlanner groq) {
         this.props = props;
+        this.phaseProps = phaseProps;
         BotProperties.Llm cfg = botProps.llm();
         // 키가 비었는데 켜져 있으면 매 주기 401을 맞는다. 그럴 바엔 아예 스크립트로 돌린다.
         boolean on = cfg.enabled() && cfg.apiKey() != null && !cfg.apiKey().isBlank();
         this.llm = on ? groq : null;
         this.planIntervalMs = cfg.intervalMs();
         log.info("AI 봇 느린 층: {}", on ? cfg.model() + " (" + cfg.intervalMs() + "ms 주기)" : "스크립트 전용");
+        log.info("진행 단계: 온보딩 {}s → 미션 {}s → 공유 {}s → 투표 {}s (총 {}분)",
+                phaseProps.onboarding().toSeconds(), phaseProps.mission().toSeconds(),
+                phaseProps.sharing().toSeconds(), phaseProps.vote().toSeconds(),
+                phaseProps.totalMs() / 60_000);
     }
 
     public Room getOrCreate(String roomId) {
-        return rooms.computeIfAbsent(roomId, id -> new Room(id, props, llm, planIntervalMs));
+        return rooms.computeIfAbsent(roomId, id -> new Room(id, props, phaseProps, llm, planIntervalMs));
     }
 
     public Room get(String roomId) {

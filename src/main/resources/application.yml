@@ -28,6 +28,16 @@ game:
   # 입력 무응답 시 플레이어 정지로 간주하는 시간(ms)
   input-timeout-ms: 500
 
+  # 진행 단계별 길이. 총 20분.
+  # 시계는 방에 첫 사람이 들어온 시점(=방의 첫 tick)부터 흐른다. 별도 "게임 시작" 신호가 아직 없다.
+  # 데모/검증에서 20분을 다 기다릴 수 없으니 짧게 덮어써서 돌린다:
+  #   --game.phases.onboarding=5s --game.phases.mission=5s --game.phases.sharing=5s --game.phases.vote=5s
+  phases:
+    onboarding: 2m    # 온보딩
+    mission: 10m      # 개별 미션 수행(순찰 1회 포함)
+    sharing: 3m       # 정보 공유 + 조각 조합
+    vote: 5m          # AI 투표 + 결말 연출
+
   bot:
     llm:
       # 기본 off. 켜두면 브라우저만 열어놔도 무료 한도가 샌다(방마다 봇이 자동 스폰됨).
