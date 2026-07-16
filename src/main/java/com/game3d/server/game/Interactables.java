@@ -39,12 +39,17 @@ final class Interactables {
         return null;
     }
 
-    /** 아직 안 풀렸고 excludeId도 아닌 <b>해결 가능한</b> 지점 중 (x,z)에서 최근접. 후보가 없으면 null. */
-    static Poi nearestUnsolved(double x, double z, Set<String> solved, String excludeId) {
+    /**
+     * 아직 안 풀렸고 exclude에도 없는 <b>해결 가능한</b> 지점 중 (x,z)에서 최근접. 후보가 없으면 null.
+     *
+     * exclude에 "직전 한 곳"이 아니라 "다녀온 곳 전부"를 넘겨야 한다. 해결 가능한 지점이 둘뿐인데
+     * 직전만 빼면 남는 건 항상 반대쪽 하나 → 두 곳을 영원히 왕복한다(2026-07 실측).
+     */
+    static Poi nearestUnsolved(double x, double z, Set<String> solved, Set<String> exclude) {
         Poi best = null;
         double bestD2 = Double.MAX_VALUE;
         for (Poi p : ALL) {
-            if (!p.solvable() || solved.contains(p.id()) || p.id().equals(excludeId)) {
+            if (!p.solvable() || solved.contains(p.id()) || exclude.contains(p.id())) {
                 continue;
             }
             double dx = p.x() - x;
