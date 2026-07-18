@@ -21,6 +21,12 @@ server:
 game:
   # 프론트 LocalPlayer.tsx의 SPEED와 반드시 일치 (권위 서버 검증용)
   speed: 6.0
+  # 아래 셋도 프론트 LocalPlayer.tsx 상수와 이중 관리다. 어긋나면 클라 예측이 서버와 벌어져
+  # 러버밴딩이 생긴다(특히 점프는 착지 시점이 눈에 띄게 튄다).
+  #   sprint-multiplier ↔ SPRINT_MULT / jump-speed ↔ JUMP_SPEED / gravity ↔ GRAVITY
+  sprint-multiplier: 1.8   # 달리기 배수 → 6.0 * 1.8 = 10.8 m/s
+  jump-speed: 6.0          # 점프 초기 수직 속도(m/s). 최고 높이 = v²/2g = 1.0m
+  gravity: 18.0            # 중력 가속도(m/s²). 9.8은 게임에선 너무 붕 떠서 크게 잡았다
   # 틱 주기(ms). 20 tick/s = 50ms
   tick-ms: 50
   # 맵 경계(반지름). Ground 100x100 평면 → ±50

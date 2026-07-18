@@ -63,7 +63,8 @@ public class GameController {
             return;
         }
         Vec3 m = msg.move();
-        room.input(playerId, m.x(), m.z(), msg.rotationY(), msg.seq(), System.currentTimeMillis());
+        room.input(playerId, m.x(), m.z(), msg.rotationY(), msg.sprint(), msg.jump(),
+                msg.seq(), System.currentTimeMillis());
     }
 
     /** 클라 → 서버: 퍼즐 해결(협동 동기화). /app/rooms/{roomId}/solve

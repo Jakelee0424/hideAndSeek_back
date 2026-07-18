@@ -108,11 +108,12 @@ public class Room {
         }
     }
 
-    /** 이동 의도 반영(권위 서버: 좌표가 아닌 방향만 받는다). */
-    public void input(String id, double moveX, double moveZ, double rotationY, long seq, long nowMs) {
+    /** 이동 의도 반영(권위 서버: 좌표가 아닌 방향만 받는다). sprint/jump도 의도일 뿐 판정은 tick이 한다. */
+    public void input(String id, double moveX, double moveZ, double rotationY,
+                      boolean sprint, boolean jump, long seq, long nowMs) {
         Player p = players.get(id);
         if (p != null) {
-            p.applyInput(moveX, moveZ, rotationY, seq, nowMs);
+            p.applyInput(moveX, moveZ, rotationY, sprint, jump, seq, nowMs);
         }
     }
 
@@ -131,14 +132,17 @@ public class Room {
         for (Player p : players.values()) {
             double mx;
             double mz;
+            boolean sprint = false;
             if (p.bot) {
                 // 봇: STOMP 입력 대신 브레인이 이동 의도를 만든다. 이하 이동·충돌은 사람과 공유.
+                // 봇은 아직 달리기/점프를 쓰지 않는다(브레인이 2D 방향만 낸다).
                 double[] mv = p.brain.steer(p, players.values(), solvedIds, nowMs);
                 mx = mv[0];
                 mz = mv[1];
             } else {
                 mx = p.inputMoveX(nowMs, timeout);
                 mz = p.inputMoveZ(nowMs, timeout);
+                sprint = p.inputSprint(nowMs, timeout);
             }
 
             // 클라 입력 불신: 이동 벡터 크기를 1로 클램프(속도 핵 방지).
@@ -148,13 +152,33 @@ public class Room {
                 mz /= len;
             }
 
-            p.x += mx * speed * dt;
-            p.z += mz * speed * dt;
+            // 달리기 배수도 서버가 곱한다. 클라가 sprint를 위조해도 배수 자체는 서버 설정이 상한이다.
+            double moveSpeed = sprint ? speed * props.sprintMultiplier() : speed;
+            p.x += mx * moveSpeed * dt;
+            p.z += mz * moveSpeed * dt;
 
             // 벽/장애물 충돌 해석(열린 감방문은 통과). 프론트 예측과 동일 로직.
+            // 충돌은 2D(x/z)다 — 점프해도 장애물을 넘지 못한다. 넘게 하려면 Collision을 3D로
+            // 바꿔야 하고 프론트 collision.ts도 같이 고쳐야 한다(이중 관리).
             double[] r = Collision.resolve(p.x, p.z, openDoors);
             p.x = r[0];
             p.z = r[1];
+
+            // 수직: 접지 중 점프 의도가 있으면 발사, 그 뒤엔 중력으로 적분. 착지하면 딱 지면에 고정.
+            // 누르고 있으면 착지 즉시 다시 뛴다(연속 점프) — 별도 엣지 판정은 두지 않았다.
+            if (!p.bot) {
+                if (p.grounded() && p.inputJump(nowMs, timeout)) {
+                    p.vy = props.jumpSpeed();
+                }
+                if (!p.grounded() || p.vy > 0) {
+                    p.vy -= props.gravity() * dt;
+                    p.y += p.vy * dt;
+                    if (p.y <= Player.GROUND_Y) {
+                        p.y = Player.GROUND_Y;
+                        p.vy = 0;
+                    }
+                }
+            }
 
             if (p.bot) {
                 // 봇은 진행 방향을 본다(프론트 LocalPlayer와 같은 규약). 정지 중엔 마지막 회전 유지.

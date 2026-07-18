@@ -6,6 +6,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "game")
 public record GameProperties(
         double speed,
+        double sprintMultiplier,
+        double jumpSpeed,
+        double gravity,
         long tickMs,
         double halfExtent,
         long inputTimeoutMs

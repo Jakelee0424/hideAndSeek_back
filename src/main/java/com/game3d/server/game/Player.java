@@ -11,7 +11,8 @@ import com.game3d.server.dto.Role;
  */
 public class Player {
 
-    private static final double SPAWN_Y = 0.5; // 캡슐 반높이(프론트와 일치)
+    /** 접지 상태의 y(캡슐 반높이). 점프는 이 값을 바닥으로 삼는다. */
+    static final double GROUND_Y = 0.5;
 
     final String id;
     final String nick;
@@ -24,9 +25,12 @@ public class Player {
 
     // 위치/회전: 루프 스레드만 쓴다.
     double x;
-    double y = SPAWN_Y;
+    double y = GROUND_Y;
     double z;
     double rotationY;
+
+    /** 수직 속도(m/s). 루프 스레드만 쓴다. 접지 중엔 0. */
+    double vy;
 
     Role role = Role.HIDER;
 
@@ -34,6 +38,8 @@ public class Player {
     private volatile double moveX;
     private volatile double moveZ;
     private volatile double desiredRotationY;
+    private volatile boolean sprint;
+    private volatile boolean jump;
     private volatile long lastInputAtMs;
     private volatile long lastSeq = -1;
 
@@ -53,7 +59,8 @@ public class Player {
     }
 
     /** 입력 수신 스레드에서 호출. 오래된(seq 역전) 입력은 버린다. */
-    void applyInput(double mx, double mz, double rotationY, long seq, long nowMs) {
+    void applyInput(double mx, double mz, double rotationY, boolean sprint, boolean jump,
+                    long seq, long nowMs) {
         if (seq <= lastSeq) {
             return;
         }
@@ -61,6 +68,8 @@ public class Player {
         this.moveX = mx;
         this.moveZ = mz;
         this.desiredRotationY = rotationY;
+        this.sprint = sprint;
+        this.jump = jump;
         this.lastInputAtMs = nowMs;
     }
 
@@ -73,13 +82,30 @@ public class Player {
         return (nowMs - lastInputAtMs) > timeoutMs ? 0 : moveZ;
     }
 
+    /** 연결이 끊기거나 창이 백그라운드로 가면 달리기가 켜진 채 굳지 않도록 타임아웃을 함께 본다. */
+    boolean inputSprint(long nowMs, long timeoutMs) {
+        return (nowMs - lastInputAtMs) <= timeoutMs && sprint;
+    }
+
+    boolean inputJump(long nowMs, long timeoutMs) {
+        return (nowMs - lastInputAtMs) <= timeoutMs && jump;
+    }
+
+    boolean grounded() {
+        return y <= GROUND_Y + 1e-6;
+    }
+
     double desiredRotationY() {
         return desiredRotationY;
     }
 
-    /** 매 tick 실리는 경량 상태. 위치는 2자리, 회전은 3자리로 반올림해 페이로드를 줄인다. */
+    /**
+     * 매 tick 실리는 경량 상태. 위치는 2자리, 회전은 3자리로 반올림해 페이로드를 줄인다.
+     * y는 절대 좌표가 아니라 **지면 위 높이**로 보낸다(프론트의 발바닥 y=0 규약).
+     */
     PlayerTick tickState() {
-        return new PlayerTick(id, round(x, 100.0), round(z, 100.0), round(rotationY, 1000.0));
+        return new PlayerTick(id, round(x, 100.0), round(y - GROUND_Y, 100.0),
+                round(z, 100.0), round(rotationY, 1000.0));
     }
 
     /** 로스터 변경(입·퇴장) 시에만 실리는 정적 정보. */
