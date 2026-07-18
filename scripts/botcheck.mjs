@@ -82,6 +82,8 @@ let botPrev = null; // 이동량 누적용 직전 위치
 let botPathLen = 0; // 총 이동 거리(m). 벽에 박혀 멈추면 0에 가깝다
 let lastBot = null; // 마지막 관측 위치(봇이 멈춘 "이유"를 가리기 위함)
 let lastHuman = null;
+/** 사람이 쪽지에서 멀 때만 잰 봇↔쪽지 거리. LLM 판별은 이걸 쓴다(우연한 동행 배제). */
+let minNoteAlone = Infinity;
 let parked = false; // 사람이 PARK에 도착했나
 let parkedSnapshots = 0;
 
@@ -159,6 +161,15 @@ function onSnapshot(snap) {
   for (const p of POIS) {
     min[p.id] = Math.min(min[p.id], dist(bot.x, bot.z, p.x, p.z));
   }
+
+  // 쪽지 근접을 LLM 증거로 쓰려면 "사람 따라가다 우연히 지나간 것"을 걸러야 한다.
+  // 길찾기 도입 전에는 봇이 쪽지 쪽으로 갈 이유가 아예 없어 근접만으로 충분했지만,
+  // 이제는 사람이 2호실에 있으면 FOLLOW로 따라 들어가며 쪽지 옆을 스친다(실측 1.22m).
+  // → 사람이 쪽지에서 멀 때의 근접만 센다.
+  const note = POIS.find((p) => !p.solvable);
+  if (note && human && dist(human.x, human.z, note.x, note.z) > 5) {
+    minNoteAlone = Math.min(minNoteAlone, dist(bot.x, bot.z, note.x, note.z));
+  }
   // 사람이 PARK에 선 뒤부터만 잰다. 걸어가는 도중을 포함하면 스폰(0,0)/(1,0)이 붙어 있어
   // 봇이 가만 있어도 1m가 찍힌다 — 구 botcheck3의 0.64m가 이 착시였다.
   if (human && parked) {
@@ -180,8 +191,9 @@ function report() {
   }
   console.log('\n봇의 최소 접근 거리:');
   for (const p of POIS) {
-    console.log(`  ${p.id.padEnd(10)} ${f(min[p.id])}   ${p.solvable ? '(스크립트도 감)' : '★ LLM만 감'}`);
+    console.log(`  ${p.id.padEnd(10)} ${f(min[p.id])}   ${p.solvable ? '(스크립트도 감)' : '(단순 근접 — 판정엔 안 씀)'}`);
   }
+  console.log(`  ${'note(단독)'.padEnd(10)} ${f(minNoteAlone)}   ★ 사람이 멀 때만 잰 값 = LLM 판별 기준`);
   console.log(`  ${'사람'.padEnd(9)} ${f(min.human)}   (PARK ${PARK.x},${PARK.z} 정차 후 ${parkedSnapshots}스냅샷 기준)`);
   console.log(`\n봇 궤적: ${botPath.join(' → ') || '없음'}`);
   console.log(`봇 총 이동거리: ${botPathLen.toFixed(1)}m`);
@@ -195,7 +207,9 @@ function report() {
   console.log(`봇↔사람 최종 거리: ${endGap === null ? '—' : endGap.toFixed(2) + 'm'}`
     + '  (ARRIVE_R 1.5m 이내면 FOLLOW 도착으로 선 것)');
 
-  const llmAlive = min['note-1'] <= 1.5;
+  // 단순 근접(min['note-1'])은 더 이상 증거가 못 된다 — 길찾기 도입 후 봇이 사람을 따라
+  // 2호실로 들어가며 쪽지 옆을 스치기 때문이다(실측 1.22m인데 LLM은 401로 전부 실패했다).
+  const llmAlive = minNoteAlone <= 1.5;
   // PARK 정차 기준만 쓰면 감옥 맵에선 영영 false다(이 스크립트의 사람은 감방을 못 벗어난다).
   // 사람이 어디에 있든 봇이 그 곁에 붙어 끝났으면 FOLLOW 성공으로 본다.
   const follow = (parked && min.human <= 2.0) || (endGap !== null && endGap <= 2.0);
