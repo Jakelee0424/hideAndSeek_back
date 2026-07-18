@@ -1,5 +1,6 @@
 package com.game3d.server.net;
 
+import com.game3d.server.dto.DoorMessage;
 import com.game3d.server.dto.InputMessage;
 import com.game3d.server.dto.JoinMessage;
 import com.game3d.server.dto.SolveMessage;
@@ -72,6 +73,15 @@ public class GameController {
         Room room = roomManager.get(roomId);
         if (room != null && msg != null) {
             room.markSolved(msg.objectId());
+        }
+    }
+
+    /** 클라 → 서버: 감방문 열림 토글. /app/rooms/{roomId}/door */
+    @MessageMapping("/rooms/{roomId}/door")
+    public void door(@DestinationVariable String roomId, @Payload DoorMessage msg) {
+        Room room = roomManager.get(roomId);
+        if (room != null && msg != null) {
+            room.toggleDoor(msg.doorId());
         }
     }
 }

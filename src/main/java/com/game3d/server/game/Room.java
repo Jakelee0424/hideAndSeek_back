@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -25,11 +26,21 @@ public class Room {
     private static final String BOT_ID = "bot-1";
     private static final String BOT_NICK = "AI";
 
+    /** 감방 4개의 중심(스폰 기준). 프론트 prisonLayout.CELLS 와 일치. */
+    private static final double[][] CELL_CENTERS = {
+        {-7, 6.5},  // 1호실(A)
+        {7, 6.5},   // 2호실(B)
+        {-7, -6.5}, // 3호실(C)
+        {7, -6.5},  // 4호실(D)
+    };
+
     private final String roomId;
     private final GameProperties props;
     private final Map<String, Player> players = new ConcurrentHashMap<>();
     // 해결된 퍼즐 오브젝트 id(협동 동기화). 컨트롤러 스레드에서 추가, 루프 스레드에서 스냅샷 읽기.
     private final Set<String> solvedIds = ConcurrentHashMap.newKeySet();
+    // 열린 감방문 id(F 토글). 컨트롤러 스레드에서 토글, 루프 스레드에서 충돌·스냅샷 읽기.
+    private final Set<String> openDoors = ConcurrentHashMap.newKeySet();
     // 로스터(id·nick) 변경 여부. 입·퇴장 스레드에서 set, 루프 스레드에서 getAndSet.
     // 초기 true → 첫 스냅샷에 로스터를 한 번 실어 클라가 닉네임을 받게 한다.
     private final AtomicBoolean rosterDirty = new AtomicBoolean(true);
@@ -70,14 +81,13 @@ public class Room {
         return true;
     }
 
-    /** 입장(멱등). 이미 있으면 닉네임만 갱신. 스폰 위치는 원 위에 분산 배치. */
+    /** 입장(멱등). 이미 있으면 닉네임만 갱신. 랜덤 감방 + 감방 내부 랜덤 위치에 스폰. */
     public void join(String id, String nick) {
         players.computeIfAbsent(id, key -> {
-            int index = players.size();
-            double angle = index * 2.399963; // 황금각으로 겹치지 않게 분산
-            double r = Math.min(6.0, 1.0 + index * 0.5);
-            double sx = Math.cos(angle) * r;
-            double sz = Math.sin(angle) * r;
+            ThreadLocalRandom rnd = ThreadLocalRandom.current();
+            double[] c = CELL_CENTERS[rnd.nextInt(CELL_CENTERS.length)];
+            double sx = c[0] + rnd.nextDouble(-2.5, 2.5);
+            double sz = c[1] + rnd.nextDouble(-2.5, 2.5);
             return new Player(key, nick, sx, sz);
         });
         spawnBot();
@@ -141,8 +151,8 @@ public class Room {
             p.x += mx * speed * dt;
             p.z += mz * speed * dt;
 
-            // 벽/장애물 충돌 해석(문은 해결 시 통과). 프론트 예측과 동일 로직.
-            double[] r = Collision.resolve(p.x, p.z, solvedIds);
+            // 벽/장애물 충돌 해석(열린 감방문은 통과). 프론트 예측과 동일 로직.
+            double[] r = Collision.resolve(p.x, p.z, openDoors);
             p.x = r[0];
             p.z = r[1];
 
@@ -166,6 +176,16 @@ public class Room {
         }
     }
 
+    /** 감방문 열림 토글(협동). F 요청마다 열림↔닫힘. 열린 문은 충돌에서 제외된다. */
+    public void toggleDoor(String doorId) {
+        if (doorId == null || doorId.isBlank()) {
+            return;
+        }
+        if (!openDoors.remove(doorId)) {
+            openDoors.add(doorId);
+        }
+    }
+
     public WorldSnapshot snapshot(long nowMs) {
         List<PlayerTick> states = new ArrayList<>(players.size());
         for (Player p : players.values()) {
@@ -186,6 +206,7 @@ public class Room {
             phase = phases.phase().name();
             phaseRemainMs = phases.remainMs(nowMs);
         }
-        return new WorldSnapshot(tick, states, roster, new ArrayList<>(solvedIds), phase, phaseRemainMs);
+        return new WorldSnapshot(tick, states, roster, new ArrayList<>(solvedIds),
+                new ArrayList<>(openDoors), phase, phaseRemainMs);
     }
 }

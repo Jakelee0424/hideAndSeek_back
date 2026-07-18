@@ -3,65 +3,121 @@ package com.game3d.server.game;
 import java.util.Set;
 
 /**
- * 정적 맵 충돌(권위). 플레이어=원(반경 PLAYER_R), 장애물=XZ 평면 AABB, 벽=경계.
- * 원-AABB 최소침투 밀어내기로 해석한다.
+ * 정적 맵 충돌(권위). 플레이어=원(반경 PLAYER_R), 벽=XZ 평면 AABB.
+ * 원-AABB 최소침투 밀어내기로 해석한다. 격리는 벽이 담당하고, 바깥 사각 clamp는 탈출 방지 그물.
  *
- * ⚠️ 프론트 game/collision.ts 와 장애물 정의·해석이 반드시 동일해야 한다
+ * ⚠️ 프론트 game/prisonLayout.ts(WALL_BOXES·BOUND) 와 반드시 동일해야 한다
  *    (서버 권위 + 클라 예측이 어긋나면 러버밴딩). 한쪽 바꾸면 양쪽 반영.
+ *
+ * 레이아웃: 식당 — 서통로 — [감방블록+복도] — 동통로 — 운동장.
  */
 final class Collision {
 
     static final double PLAYER_R = 0.4;
-    static final double ROOM_INNER = 10.4; // 벽 안쪽면 - 플레이어 반경 (맵 ROOM=11, 벽두께 0.4)
+    static final double BOUND_X = 44.2; // 바깥 안전 경계
+    static final double BOUND_Z = 14.2;
 
-    /** solvableId != null 이고 해결되면 통과 가능(문). */
-    private record Box(double cx, double cz, double hx, double hz, String solvableId) {}
+    private record Box(double cx, double cz, double hx, double hz) {}
 
-    private static final Box[] OBSTACLES = {
-        new Box(3, 3, 0.5, 0.5, null),     // crate
-        new Box(4, 3, 0.5, 0.5, null),     // crate
-        new Box(-4, -5, 0.5, 0.5, null),   // crate
-        new Box(5, -4, 0.45, 0.45, null),  // lockbox
-        new Box(-8, 0, 0.8, 0.125, "door-1"), // door: 해결 시 통과
+    // 감방문: id가 solved에 있으면(열림) 충돌에서 제외 → 통과. 프론트 prisonLayout.DOOR_BOXES 와 일치.
+    private record DoorBox(String id, double cx, double cz, double hx, double hz) {}
+
+    private static final DoorBox[] DOORS = {
+        new DoorBox("cell-A", -7, 2.5, 1.0, 0.2),
+        new DoorBox("cell-B", 7, 2.5, 1.0, 0.2),
+        new DoorBox("cell-C", -7, -2.5, 1.0, 0.2),
+        new DoorBox("cell-D", 7, -2.5, 1.0, 0.2),
+    };
+
+    // prisonLayout.WALL_BOXES 와 동일한 28개(솔리드 벽 22 + 창살 6).
+    private static final Box[] WALLS = {
+        // 감방블록 외벽
+        new Box(0.0, 11.0, 14.2, 0.2),
+        new Box(0.0, -11.0, 14.2, 0.2),
+        new Box(14.0, 6.85, 0.2, 4.35),
+        new Box(14.0, -6.85, 0.2, 4.35),
+        new Box(-14.0, 6.85, 0.2, 4.35),
+        new Box(-14.0, -6.85, 0.2, 4.35),
+        // 감방 사이 세로 벽
+        new Box(0.0, 6.65, 0.2, 4.15),
+        new Box(0.0, -6.65, 0.2, 4.15),
+        // 동통로
+        new Box(20.1, 2.5, 6.1, 0.2),
+        new Box(20.1, -2.5, 6.1, 0.2),
+        // 서통로
+        new Box(-20.1, 2.5, 6.1, 0.2),
+        new Box(-20.1, -2.5, 6.1, 0.2),
+        // 운동장 담
+        new Box(35.1, 14.0, 9.1, 0.2),
+        new Box(35.1, -14.0, 9.1, 0.2),
+        new Box(44.0, 0.0, 0.2, 14.2),
+        new Box(26.0, 8.35, 0.2, 5.85),
+        new Box(26.0, -8.35, 0.2, 5.85),
+        // 식당 벽
+        new Box(-35.1, 12.0, 9.1, 0.2),
+        new Box(-35.1, -12.0, 9.1, 0.2),
+        new Box(-44.0, 0.0, 0.2, 12.2),
+        new Box(-26.0, 7.35, 0.2, 4.85),
+        new Box(-26.0, -7.35, 0.2, 4.85),
+        // 감방 정면 창살(문 개구부 제외)
+        new Box(-10.9, 2.5, 2.9, 0.2),
+        new Box(0.0, 2.5, 6.0, 0.2),
+        new Box(10.9, 2.5, 2.9, 0.2),
+        new Box(-10.9, -2.5, 2.9, 0.2),
+        new Box(0.0, -2.5, 6.0, 0.2),
+        new Box(10.9, -2.5, 2.9, 0.2),
     };
 
     private Collision() {}
 
-    /** (x,z)를 벽 경계 + 장애물 밖으로 밀어낸 위치를 반환. */
-    static double[] resolve(double x, double z, Set<String> solved) {
-        x = clamp(x, -ROOM_INNER, ROOM_INNER);
-        z = clamp(z, -ROOM_INNER, ROOM_INNER);
+    /**
+     * (x,z)를 바깥 경계 + 벽 밖으로 밀어낸 위치를 반환.
+     * 감방문은 openDoors에 id가 있으면(열림) 충돌에서 제외 → 통과.
+     */
+    static double[] resolve(double x, double z, Set<String> openDoors) {
+        x = clamp(x, -BOUND_X, BOUND_X);
+        z = clamp(z, -BOUND_Z, BOUND_Z);
 
         final double r = PLAYER_R;
-        for (Box b : OBSTACLES) {
-            if (b.solvableId() != null && solved.contains(b.solvableId())) {
-                continue;
+        double[] p = {x, z};
+        for (Box b : WALLS) {
+            pushOut(p, b.cx(), b.cz(), b.hx(), b.hz(), r);
+        }
+        for (DoorBox d : DOORS) {
+            if (openDoors.contains(d.id())) {
+                continue; // 열린 문은 통과
             }
-            double nx = clamp(x, b.cx() - b.hx(), b.cx() + b.hx());
-            double nz = clamp(z, b.cz() - b.hz(), b.cz() + b.hz());
-            double dx = x - nx;
-            double dz = z - nz;
-            double d2 = dx * dx + dz * dz;
-            if (d2 >= r * r) {
-                continue;
-            }
-            if (d2 > 1e-8) {
-                double d = Math.sqrt(d2);
-                double push = (r - d) / d;
-                x += dx * push;
-                z += dz * push;
+            pushOut(p, d.cx(), d.cz(), d.hx(), d.hz(), r);
+        }
+        return p;
+    }
+
+    /** 원(반경 r)을 AABB 박스 밖으로 밀어낸다. p={x,z}를 제자리 수정. */
+    private static void pushOut(double[] p, double cx, double cz, double hx, double hz, double r) {
+        double x = p[0];
+        double z = p[1];
+        double nx = clamp(x, cx - hx, cx + hx);
+        double nz = clamp(z, cz - hz, cz + hz);
+        double dx = x - nx;
+        double dz = z - nz;
+        double d2 = dx * dx + dz * dz;
+        if (d2 >= r * r) {
+            return;
+        }
+        if (d2 > 1e-8) {
+            double d = Math.sqrt(d2);
+            double push = (r - d) / d;
+            p[0] = x + dx * push;
+            p[1] = z + dz * push;
+        } else {
+            double penX = hx + r - Math.abs(x - cx);
+            double penZ = hz + r - Math.abs(z - cz);
+            if (penX < penZ) {
+                p[0] = x + Math.signum(x - cx) * penX;
             } else {
-                // 중심이 박스 내부: 침투가 작은 축으로 밀어냄
-                double penX = b.hx() + r - Math.abs(x - b.cx());
-                double penZ = b.hz() + r - Math.abs(z - b.cz());
-                if (penX < penZ) {
-                    x += Math.signum(x - b.cx()) * penX;
-                } else {
-                    z += Math.signum(z - b.cz()) * penZ;
-                }
+                p[1] = z + Math.signum(z - cz) * penZ;
             }
         }
-        return new double[] {x, z};
     }
 
     private static double clamp(double v, double lo, double hi) {
