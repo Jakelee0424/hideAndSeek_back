@@ -7,6 +7,7 @@ import com.game3d.server.dto.SolveMessage;
 import com.game3d.server.dto.Vec3;
 import com.game3d.server.game.Room;
 import com.game3d.server.game.RoomManager;
+import com.game3d.server.game.WaitingQueue;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
@@ -28,16 +29,27 @@ public class GameController {
     static final String ATTR_PLAYER = "playerId";
 
     private final RoomManager roomManager;
+    private final WaitingQueue queue;
 
-    public GameController(RoomManager roomManager) {
+    public GameController(RoomManager roomManager, WaitingQueue queue) {
         this.roomManager = roomManager;
+        this.queue = queue;
     }
 
-    /** 클라 → 서버: 룸 입장. /app/rooms/{roomId}/join */
+    /**
+     * 클라 → 서버: 룸 입장. /app/rooms/{roomId}/join
+     *
+     * 대기열 게이트를 여기서 통과시킨다. 대기열 REST만 두고 join을 검사하지 않으면
+     * 대기 화면을 건너뛰고 곧장 STOMP로 붙는 것을 막을 수 없어 게이트가 장식이 된다.
+     */
     @MessageMapping("/rooms/{roomId}/join")
     public void join(@DestinationVariable String roomId,
                      @Payload JoinMessage msg,
                      SimpMessageHeaderAccessor accessor) {
+        if (!queue.admitOnJoin(msg.id(), msg.token())) {
+            return; // 정원 초과. 클라는 대기열 REST로 순번을 받아 기다린다.
+        }
+
         Room room = roomManager.getOrCreate(roomId);
         room.join(msg.id(), msg.nick());
 
