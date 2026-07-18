@@ -1,6 +1,14 @@
 spring:
   application:
     name: game3d-server
+  jackson:
+    deserialization:
+      # 클라가 안 보낸 primitive 필드를 기본값(false/0)으로 받는다.
+      # Jackson 3은 이게 켜져 있으면 "없는 필드 → null → primitive" 매핑을 실패로 처리해
+      # **메시지 전체를 거부**한다. 2026-07-18 InputMessage에 sprint/jump(boolean)를 추가했을 때
+      # 그 필드를 안 보내는 구버전 클라의 이동 입력이 전부 막혔다(캐릭터가 아예 안 움직임).
+      # DTO에 필드를 더할 때마다 구버전 클라를 깨뜨리지 않으려면 이 설정이 필요하다.
+      fail-on-null-for-primitives: false
   datasource:
     url: jdbc:h2:mem:game3d;DB_CLOSE_DELAY=-1
     driver-class-name: org.h2.Driver
