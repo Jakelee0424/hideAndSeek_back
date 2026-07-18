@@ -17,10 +17,14 @@ final class Interactables {
     /** label은 LLM 프롬프트에 그대로 들어간다. 토큰 예산이 빠듯하니 짧게 유지할 것. */
     record Poi(String id, double x, double z, boolean solvable, String label) {}
 
+    // 좌표는 프론트 interactables.ts의 position [x, y, z]에서 x·z만 가져온 것이다.
+    // 2026-07-18 감옥 재구성 때 프론트만 갱신되고 여기가 옛 좌표(5,-4 / -8,0 / 0,6)로 남아
+    // 봇이 유령 지점으로 걸어가다 벽에 박혀 정지했다. note-1의 옛 좌표 (0,6)은 감방 사이
+    // 세로 벽(Collision의 Box(0, 6.65, 0.2, 4.15)) 안이었다.
     private static final List<Poi> ALL = List.of(
-            new Poi("lockbox-1", 5, -4, true, "자물쇠 상자"),
-            new Poi("door-1", -8, 0, true, "잠긴 문(탈출구)"),
-            new Poi("note-1", 0, 6, false, "낡은 쪽지(문 코드 힌트)")
+            new Poi("lockbox-1", -10, 8, true, "자물쇠 상자(1호실)"),
+            new Poi("door-1", 11.8, -8, true, "잠긴 문(4호실, 탈출구)"),
+            new Poi("note-1", 10, 8, false, "낡은 쪽지(2호실, 문 코드 힌트)")
     );
 
     private Interactables() {}

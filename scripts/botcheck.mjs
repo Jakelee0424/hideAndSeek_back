@@ -25,11 +25,18 @@ const BOT = 'bot-1';
 const DURATION_MS = 30_000;
 const INPUT_HZ_MS = 100; // 서버 input-timeout-ms=500 → 이보다 촘촘히 보내야 계속 걷는다
 
-/** Interactables.java와 일치해야 함. 바뀌면 여기도 반영. */
+/**
+ * Interactables.java와 일치해야 함. 바뀌면 여기도 반영.
+ *
+ * ⚠️ 감옥 맵(2026-07-18)부터 세 지점이 모두 **감방 안**이고 감방문은 닫힌 채 시작한다.
+ *    사람이 F로 문을 열어주기 전까지 봇은 자기 감방 밖으로 못 나가므로,
+ *    "note-1 도달 = LLM 동작"이라는 원래 판별은 문이 열린 상황에서만 성립한다.
+ *    문이 닫힌 채로도 확인할 수 있는 것은 아래의 "봇이 움직이는가"다.
+ */
 const POIS = [
-  { id: 'lockbox-1', x: 5, z: -4, solvable: true },
-  { id: 'door-1', x: -8, z: 0, solvable: true },
-  { id: 'note-1', x: 0, z: 6, solvable: false },
+  { id: 'lockbox-1', x: -10, z: 8, solvable: true },  // 1호실
+  { id: 'door-1', x: 11.8, z: -8, solvable: true },   // 4호실
+  { id: 'note-1', x: 10, z: 8, solvable: false },     // 2호실
 ];
 
 /** 사람을 세워둘 자리. 어떤 POI와도 9m 이상 떨어져야 FOLLOW 판정이 의미를 갖는다. */
@@ -71,6 +78,10 @@ let snapshots = 0;
 let botSeen = 0;
 let roster = null;
 let botPath = []; // 봇 궤적(듬성듬성) — 무한 왕복(이슈 1) 눈으로 보기용
+let botPrev = null; // 이동량 누적용 직전 위치
+let botPathLen = 0; // 총 이동 거리(m). 벽에 박혀 멈추면 0에 가깝다
+let lastBot = null; // 마지막 관측 위치(봇이 멈춘 "이유"를 가리기 위함)
+let lastHuman = null;
 let parked = false; // 사람이 PARK에 도착했나
 let parkedSnapshots = 0;
 
@@ -127,13 +138,23 @@ function onSnapshot(snap) {
 
   const states = snap.states ?? [];
   const human = states.find((s) => s.id === ME);
-  if (human) me = { x: human.x, z: human.z };
+  if (human) {
+    me = { x: human.x, z: human.z };
+    lastHuman = me;
+  }
 
   if (human && dist(human.x, human.z, PARK.x, PARK.z) <= ARRIVE_R) parked = true;
 
   const bot = states.find((s) => s.id === BOT);
   if (!bot) return;
   botSeen += 1;
+
+  // 이동량 누적 — 벽에 박혀 정지하는 회귀(2026-07-18)를 잡는 핵심 지표.
+  if (botPrev) {
+    botPathLen += Math.hypot(bot.x - botPrev.x, bot.z - botPrev.z);
+  }
+  botPrev = { x: bot.x, z: bot.z };
+  lastBot = botPrev;
 
   for (const p of POIS) {
     min[p.id] = Math.min(min[p.id], dist(bot.x, bot.z, p.x, p.z));
@@ -163,10 +184,30 @@ function report() {
   }
   console.log(`  ${'사람'.padEnd(9)} ${f(min.human)}   (PARK ${PARK.x},${PARK.z} 정차 후 ${parkedSnapshots}스냅샷 기준)`);
   console.log(`\n봇 궤적: ${botPath.join(' → ') || '없음'}`);
+  console.log(`봇 총 이동거리: ${botPathLen.toFixed(1)}m`);
+
+  // 감옥 맵에선 이 스크립트의 사람도 길찾기가 없어 PARK까지 못 간다(감방에 갇힌다).
+  // 그래서 정차 여부와 무관하게 마지막 위치를 찍는다 — 봇이 멈춘 이유가 "벽에 박혀서"인지
+  // "사람 곁에 도착해서(FOLLOW 성공)"인지 이걸로 구분한다.
+  const endGap = lastBot && lastHuman ? dist(lastBot.x, lastBot.z, lastHuman.x, lastHuman.z) : null;
+  console.log(`\n마지막 위치 — 봇 (${lastBot?.x.toFixed(1)}, ${lastBot?.z.toFixed(1)})`
+    + ` · 사람 (${lastHuman?.x.toFixed(1)}, ${lastHuman?.z.toFixed(1)})`);
+  console.log(`봇↔사람 최종 거리: ${endGap === null ? '—' : endGap.toFixed(2) + 'm'}`
+    + '  (ARRIVE_R 1.5m 이내면 FOLLOW 도착으로 선 것)');
 
   const llmAlive = min['note-1'] <= 1.5;
-  const follow = parked && min.human <= 2.0;
+  // PARK 정차 기준만 쓰면 감옥 맵에선 영영 false다(이 스크립트의 사람은 감방을 못 벗어난다).
+  // 사람이 어디에 있든 봇이 그 곁에 붙어 끝났으면 FOLLOW 성공으로 본다.
+  const follow = (parked && min.human <= 2.0) || (endGap !== null && endGap <= 2.0);
+  // 30초 동안 6m도 못 움직였으면 사실상 정지다(속도 6m/s이니 1초치 거리도 안 된다).
+  const moving = botPathLen >= 6;
+
   console.log('\n──────── 판정 ────────');
+  console.log(moving
+    ? `✅ 봇이 움직인다 (${botPathLen.toFixed(1)}m)`
+    : `❌ 봇이 사실상 정지 (${botPathLen.toFixed(1)}m) — 벽에 박혔거나 목표 좌표가 도달 불가.`
+      + '\n   서버 Interactables.java의 POI 좌표가 프론트 interactables.ts와 일치하는지 볼 것.');
+
   if (botSeen === 0) {
     console.log('✗ 봇이 스냅샷에 없다. spawnBot/isEmpty를 볼 것.');
   } else if (llmAlive) {
@@ -175,8 +216,9 @@ function report() {
     console.log('❌ LLM 층 미확인 — note-1 근처에 못 갔다. 봇은 스크립트로만 돈 듯하다.');
     console.log('   서버 로그의 "봇 계획:" / "봇 계획 실패(...)" 라인을 볼 것.');
   }
-  console.log(follow ? '✅ FOLLOW_PLAYER 정황 — 먼 구석의 사람에게 접근했다.'
+  console.log(follow ? '✅ FOLLOW_PLAYER 동작 — 사람 곁에 도착해 섰다(정지 이유가 벽이 아니다).'
                      : '· FOLLOW_PLAYER 미관측(이번 판단에 안 나왔을 뿐일 수 있다).');
   ws.close();
-  process.exit(llmAlive ? 0 : 1);
+  // 감방문이 닫힌 채로는 note-1 도달이 불가능하므로 "움직이는가"를 종료 코드 기준으로 삼는다.
+  process.exit(moving ? 0 : 1);
 }

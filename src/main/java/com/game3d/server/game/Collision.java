@@ -92,6 +92,49 @@ final class Collision {
         return p;
     }
 
+    /**
+     * (x,z)가 <b>벽</b>에 막히면 true. 감방문은 보지 않는다 — 봇 길찾기 전용.
+     *
+     * 봇에게 감방문은 장애물이 아니라 "열고 지나갈 것"이다(Room.tick이 근접하면 열어준다).
+     * 문까지 막힌 것으로 세면 문 좌표 자체가 통행 불가가 되어, 문을 웨이포인트로 삼는 시야 검사가
+     * 항상 실패한다 → 봇이 감방 안에서 제자리만 맴돈다(2026-07-18 실측: 178m를 움직였는데
+     * 순 이동은 0이었다).
+     */
+    static boolean blockedByWall(double x, double z) {
+        if (x < -BOUND_X || x > BOUND_X || z < -BOUND_Z || z > BOUND_Z) {
+            return true;
+        }
+        double[] p = {x, z};
+        for (Box b : WALLS) {
+            pushOut(p, b.cx(), b.cz(), b.hx(), b.hz(), PLAYER_R);
+        }
+        return Math.abs(p[0] - x) > 1e-9 || Math.abs(p[1] - z) > 1e-9;
+    }
+
+    /**
+     * (x,z)에서 range 안에 있는 <b>닫힌</b> 감방문 중 최근접의 id. 없으면 null.
+     *
+     * 봇이 스스로 문을 열 때 쓴다. 사람은 프론트에서 근접 판정 후 F로 여는데, 봇은 프론트가
+     * 없으니 서버가 같은 판정을 대신한다(사거리도 프론트 DOOR_RANGE와 같은 값을 쓸 것).
+     */
+    static String nearestClosedDoor(double x, double z, Set<String> openDoors, double range) {
+        String best = null;
+        double bestD2 = range * range;
+        for (DoorBox d : DOORS) {
+            if (openDoors.contains(d.id())) {
+                continue;
+            }
+            double dx = d.cx() - x;
+            double dz = d.cz() - z;
+            double d2 = dx * dx + dz * dz;
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                best = d.id();
+            }
+        }
+        return best;
+    }
+
     /** 원(반경 r)을 AABB 박스 밖으로 밀어낸다. p={x,z}를 제자리 수정. */
     private static void pushOut(double[] p, double cx, double cz, double hx, double hz, double r) {
         double x = p[0];

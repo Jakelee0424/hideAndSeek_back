@@ -14,8 +14,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * AI 봇의 2계층 브레인.
  *
  * <ul>
- *   <li><b>빠른 층</b>({@link #steer}) — 매 tick. 현재 goal의 목표 지점으로 향하는 단위벡터만 계산한다.
- *       실제 이동·충돌은 Room.tick이 사람과 똑같이 처리하므로 벽 회피는 공짜로 따라온다.</li>
+ *   <li><b>빠른 층</b>({@link #steer}) — 매 tick. 현재 goal까지의 경로를 {@link BotNav}로 풀어
+ *       다음 웨이포인트로 향하는 단위벡터를 낸다. 실제 이동·충돌은 Room.tick이 사람과 똑같이 처리한다.
+ *       <br>⚠️ 예전엔 여기 "충돌 처리가 알아서 하니 벽 회피는 공짜"라고 적혀 있었는데 틀린 말이었다.
+ *       충돌은 벽을 <b>통과하지 않게</b> 할 뿐 <b>돌아가게</b> 하지 않는다. 개활지 맵에선 티가 안 났지만
+ *       감옥 맵에서 봇이 벽에 붙어 멈추는 회귀로 드러났다(2026-07-18).</li>
  *   <li><b>느린 층</b> — 두 겹이다. 스크립트({@link #reconsider})가 항상 즉시 목표를 채우고,
  *       LLM({@link BotPlanner})이 준비되면 그 위에 덮어쓴다.</li>
  * </ul>
@@ -47,6 +50,21 @@ final class BotBrain {
     // 목표 좌표: 루프 스레드만 쓴다(tick마다 배열 새로 만들지 않으려고 필드로 둔다).
     private double targetX;
     private double targetZ;
+
+    // 길찾기 결과 캐시(루프 스레드 전용). BotNav는 시야 판정에 충돌 검사를 여러 번 돌리므로
+    // 매 tick(20Hz) 돌리면 1 vCPU 서버엔 부담이다. 아래 조건에서만 다시 푼다.
+    private double navX;
+    private double navZ;
+    private long navAtMs;
+    private double navForX;
+    private double navForZ;
+
+    /** 경로 재탐색 주기(ms). 이보다 자주는 안 푼다. */
+    private static final long NAV_REFRESH_MS = 400;
+    /** 최종 목표가 이만큼 움직이면 즉시 재탐색(사람을 따라갈 때). */
+    private static final double NAV_TARGET_MOVED = 1.5;
+    /** 웨이포인트에 이만큼 다가가면 즉시 재탐색(다음 구간으로 넘어가려고). */
+    private static final double NAV_REACHED = 1.0;
 
     /**
      * 이미 다녀온 POI(도착 순). 봇의 "기억"이다.
@@ -93,10 +111,28 @@ final class BotBrain {
             return STOP; // 갈 곳 없음(안 풀린 퍼즐이 없거나 방금 도착한 그곳뿐)
         }
 
-        double dx = targetX - self.x;
-        double dz = targetZ - self.z;
+        // 최종 목표가 아니라 "지금 향할 지점"으로 간다. 벽 너머면 경로상 다음 웨이포인트가 나온다.
+        updateNav(self, nowMs);
+        double dx = navX - self.x;
+        double dz = navZ - self.z;
         double len = Math.hypot(dx, dz);
         return len < 1e-6 ? STOP : new double[] {dx / len, dz / len};
+    }
+
+    /** 길찾기 캐시 갱신. 주기가 지났거나, 목표가 크게 움직였거나, 웨이포인트에 다다랐을 때만 다시 푼다. */
+    private void updateNav(Player self, long nowMs) {
+        boolean stale = nowMs - navAtMs >= NAV_REFRESH_MS
+                || Math.hypot(targetX - navForX, targetZ - navForZ) > NAV_TARGET_MOVED
+                || Math.hypot(navX - self.x, navZ - self.z) < NAV_REACHED;
+        if (!stale) {
+            return;
+        }
+        double[] p = BotNav.steerPoint(self.x, self.z, targetX, targetZ);
+        navX = p[0];
+        navZ = p[1];
+        navForX = targetX;
+        navForZ = targetZ;
+        navAtMs = nowMs;
     }
 
     /**

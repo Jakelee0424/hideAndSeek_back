@@ -26,6 +26,9 @@ public class Room {
     private static final String BOT_ID = "bot-1";
     private static final String BOT_NICK = "AI";
 
+    /** 봇이 감방문을 여는 사거리(m). 프론트 prisonLayout.DOOR_RANGE 와 같은 값. */
+    private static final double BOT_DOOR_RANGE = 3.0;
+
     /** 감방 4개의 중심(스폰 기준). 프론트 prisonLayout.CELLS 와 일치. */
     private static final double[][] CELL_CENTERS = {
         {-7, 6.5},  // 1호실(A)
@@ -84,11 +87,8 @@ public class Room {
     /** 입장(멱등). 이미 있으면 닉네임만 갱신. 랜덤 감방 + 감방 내부 랜덤 위치에 스폰. */
     public void join(String id, String nick) {
         players.computeIfAbsent(id, key -> {
-            ThreadLocalRandom rnd = ThreadLocalRandom.current();
-            double[] c = CELL_CENTERS[rnd.nextInt(CELL_CENTERS.length)];
-            double sx = c[0] + rnd.nextDouble(-2.5, 2.5);
-            double sz = c[1] + rnd.nextDouble(-2.5, 2.5);
-            return new Player(key, nick, sx, sz);
+            double[] s = randomCellSpawn();
+            return new Player(key, nick, s[0], s[1]);
         });
         spawnBot();
         // 봇까지 넣은 뒤에 세워야 로스터에 봇 닉("AI")이 함께 실린다.
@@ -96,9 +96,27 @@ public class Room {
         phaseDirty.set(true);  // 중간 입장자에게 현재 단계·남은 시간 1회 전송
     }
 
-    /** AI 봇 투입(멱등). 첫 사람이 들어오면 자동으로 같이 스폰된다. */
+    /**
+     * AI 봇 투입(멱등). 첫 사람이 들어오면 자동으로 같이 스폰된다.
+     *
+     * 사람과 같은 랜덤 감방 스폰을 쓴다. 예전엔 (0,0) 하드코딩이었는데, 감옥 재구성으로
+     * 사람만 감방에 갇혀 시작하게 바뀌면서 봇 혼자 중앙 복도에 서 있는 상태가 됐다.
+     */
     public void spawnBot() {
-        players.computeIfAbsent(BOT_ID, key -> new Player(key, BOT_NICK, 0, 0, new BotBrain(llm, planIntervalMs)));
+        players.computeIfAbsent(BOT_ID, key -> {
+            double[] s = randomCellSpawn();
+            return new Player(key, BOT_NICK, s[0], s[1], new BotBrain(llm, planIntervalMs));
+        });
+    }
+
+    /** 랜덤 감방 + 감방 내부 랜덤 위치. {x, z} */
+    private static double[] randomCellSpawn() {
+        ThreadLocalRandom rnd = ThreadLocalRandom.current();
+        double[] c = CELL_CENTERS[rnd.nextInt(CELL_CENTERS.length)];
+        return new double[] {
+            c[0] + rnd.nextDouble(-2.5, 2.5),
+            c[1] + rnd.nextDouble(-2.5, 2.5),
+        };
     }
 
     /** 이탈. */
@@ -181,6 +199,14 @@ public class Room {
             }
 
             if (p.bot) {
+                // 봇도 감방문을 연다. 사람이 F로 하는 근접 판정을 서버가 대신한다.
+                // 열기만 하고 닫지는 않는다 — 닫으면 사람의 토글과 서로 되돌리며 싸운다.
+                // 이게 없으면 봇은 감방에 갇힌 채 문에 밀착해 멈춘다(2026-07-18 회귀).
+                String door = Collision.nearestClosedDoor(p.x, p.z, openDoors, BOT_DOOR_RANGE);
+                if (door != null && openDoors.add(door)) {
+                    log.info("방 {} 봇이 감방문 {} 열었다", roomId, door);
+                }
+
                 // 봇은 진행 방향을 본다(프론트 LocalPlayer와 같은 규약). 정지 중엔 마지막 회전 유지.
                 if (len > 1e-6) {
                     p.rotationY = Math.atan2(mx, mz);
