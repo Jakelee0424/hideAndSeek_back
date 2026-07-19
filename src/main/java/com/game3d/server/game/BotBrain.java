@@ -34,6 +34,14 @@ final class BotBrain {
     /** 목표에 이 거리 안으로 들어오면 도착으로 본다(프론트 INTERACT_RANGE 2.2보다 안쪽). */
     private static final double ARRIVE_R = 1.5;
 
+    /**
+     * 자물쇠 앞에 서서 "푸는 척" 머무는 시간(ms).
+     *
+     * 봇은 퍼즐 UI가 없어 사실 즉시 풀 수 있지만, 도착하자마자 문이 열리면 보는 사람에게
+     * 대놓고 치트로 보인다. 잠깐 멈춰 있다가 열리면 사람이 푸는 모습과 구분되지 않는다.
+     */
+    private static final long SOLVE_DWELL_MS = 5000;
+
     /** 정지. 호출부는 읽기만 한다(핫패스 할당 회피용 공유 상수). */
     private static final double[] STOP = {0, 0};
 
@@ -50,6 +58,13 @@ final class BotBrain {
     // 목표 좌표: 루프 스레드만 쓴다(tick마다 배열 새로 만들지 않으려고 필드로 둔다).
     private double targetX;
     private double targetZ;
+
+    /** 이번 tick에 못 닿는 POI. 루프 스레드가 steer 진입 때 채우고 그 안에서만 읽는다. */
+    private Set<String> blocked = Set.of();
+
+    // "푸는 중"인 자물쇠와 그 완료 시각. 루프 스레드 전용.
+    private String solvingId;
+    private long solvingUntilMs;
 
     // 길찾기 결과 캐시(루프 스레드 전용). BotNav는 시야 판정에 충돌 검사를 여러 번 돌리므로
     // 매 tick(20Hz) 돌리면 1 vCPU 서버엔 부담이다. 아래 조건에서만 다시 푼다.
@@ -86,8 +101,34 @@ final class BotBrain {
         return goal;
     }
 
-    /** 빠른 층: 이번 tick의 이동 의도(단위벡터). 목표가 없거나 낡았으면 스크립트로 즉시 다시 고른다. */
-    double[] steer(Player self, Collection<Player> players, Set<String> solved, long nowMs) {
+    /**
+     * 머무는 시간을 다 채운 자물쇠 id를 <b>한 번만</b> 돌려준다. 아직이거나 없으면 null.
+     * Room이 tick마다 수거해 solvedIds에 넣고 그 방 문을 연다.
+     */
+    String pollSolved(long nowMs) {
+        if (solvingId == null || nowMs < solvingUntilMs) {
+            return null;
+        }
+        String done = solvingId;
+        solvingId = null;
+        return done;
+    }
+
+    /**
+     * 빠른 층: 이번 tick의 이동 의도(단위벡터). 목표가 없거나 낡았으면 스크립트로 즉시 다시 고른다.
+     *
+     * blocked는 지금 물리적으로 못 닿는 POI(잠긴 남의 감방 안 자물쇠 등)다. 후보에서 빼지 않으면
+     * 봇이 열 수 없는 문 앞에 붙어 멈춘다. 판정은 Room이 한다(잠금 규칙을 아는 쪽이 거기라서).
+     */
+    double[] steer(Player self, Collection<Player> players, Set<String> solved,
+                   Set<String> blocked, long nowMs) {
+        this.blocked = blocked;
+
+        // 자물쇠를 "푸는 중"이면 그 자리에 서 있는다. 시간이 차면 Room이 pollSolved로 수거한다.
+        if (solvingId != null) {
+            return STOP;
+        }
+
         Goal g = goal;
         boolean hasTarget = resolveTarget(g, players, solved);
 
@@ -98,6 +139,15 @@ final class BotBrain {
                 return STOP;
             }
             visited.add(g.targetId()); // 다녀온 곳으로 기억 → 다시 고르지 않는다
+
+            // 봇이 풀 수 있는 자물쇠에 도착했으면 여기서부터 "푸는 척" 머문다.
+            Interactables.Poi arrived = Interactables.find(g.targetId());
+            if (arrived != null && arrived.botSolvable() && !solved.contains(arrived.id())) {
+                solvingId = arrived.id();
+                solvingUntilMs = nowMs + SOLVE_DWELL_MS;
+                log.info("봇이 {} 앞에서 여는 중", arrived.id());
+                return STOP;
+            }
             hasTarget = false; // 도착 → 다음 목표를 고른다
         }
         if (!hasTarget) {
@@ -144,7 +194,9 @@ final class BotBrain {
         switch (g.action()) {
             case GOTO_PUZZLE, GOTO_NOTE -> {
                 Interactables.Poi p = Interactables.find(g.targetId());
-                if (p == null || (p.solvable() && solved.contains(p.id()))) {
+                // 못 닿게 된 목표는 버린다 — 붙잡고 있으면 그쪽 벽으로 계속 밀고 간다.
+                if (p == null || blocked.contains(g.targetId())
+                        || (p.solvable() && solved.contains(p.id()))) {
                     return false;
                 }
                 targetX = p.x();
@@ -152,6 +204,9 @@ final class BotBrain {
                 return true;
             }
             case FOLLOW_PLAYER -> {
+                if (blocked.contains(g.targetId())) {
+                    return false; // 따라가던 사람이 잠긴 감방 안으로 판정됐다
+                }
                 for (Player p : players) {
                     if (!p.bot && p.id.equals(g.targetId())) {
                         targetX = p.x;
@@ -177,7 +232,12 @@ final class BotBrain {
      * 사람이 퍼즐을 풀면 solved가 바뀌고, 그때 아래 nearestUnsolved가 다시 후보를 낸다.
      */
     private void reconsider(Player self, Collection<Player> players, Set<String> solved) {
-        Interactables.Poi next = Interactables.nearestUnsolved(self.x, self.z, solved, visited);
+        Set<String> skip = visited;
+        if (!blocked.isEmpty()) {
+            skip = new LinkedHashSet<>(visited);
+            skip.addAll(blocked);
+        }
+        Interactables.Poi next = Interactables.nearestUnsolved(self.x, self.z, solved, skip);
         if (next != null) {
             goal = Goal.gotoPuzzle(next.id());
             return;
@@ -186,12 +246,15 @@ final class BotBrain {
         goal = mate == null ? Goal.IDLE : Goal.followPlayer(mate.id);
     }
 
-    /** 같은 방의 사람 중 최근접. 아무도 없으면 null(봇만 남은 방). */
-    private static Player nearestHuman(Player self, Collection<Player> players) {
+    /**
+     * 지금 닿을 수 있는 사람 중 최근접. 아무도 없으면 null(봇만 남았거나 다들 잠긴 감방 안).
+     * 못 닿는 사람을 고르면 그 사람 감방문 앞에 붙어 멈춘다 — IDLE로 서 있는 편이 낫다.
+     */
+    private Player nearestHuman(Player self, Collection<Player> players) {
         Player best = null;
         double bestD2 = Double.MAX_VALUE;
         for (Player p : players) {
-            if (p.bot) {
+            if (p.bot || blocked.contains(p.id)) {
                 continue;
             }
             double dx = p.x - self.x;
@@ -234,11 +297,17 @@ final class BotBrain {
     private BotContext snapshot(Player self, Collection<Player> players, Set<String> solved) {
         List<BotContext.PoiView> pois = new ArrayList<>(Interactables.all().size());
         for (Interactables.Poi p : Interactables.all()) {
+            // 못 닿는 지점은 아예 안 보여준다. 프롬프트로 "가지 마라"고 부탁하는 것보다 확실하고,
+            // valid()가 ctx.pois 기준이라 모델이 그래도 고르면 자동으로 무효 처리된다.
+            if (blocked.contains(p.id())) {
+                continue;
+            }
             pois.add(new BotContext.PoiView(p.id(), p.x(), p.z(), p.label(), solved.contains(p.id())));
         }
         List<BotContext.MateView> mates = new ArrayList<>();
         for (Player p : players) {
-            if (!p.bot) {
+            // 못 닿는 사람도 POI와 같은 이유로 감춘다(모델이 고르면 valid()가 걸러내기도 한다).
+            if (!p.bot && !blocked.contains(p.id)) {
                 mates.add(new BotContext.MateView(p.id, p.nick, p.x, p.z));
             }
         }

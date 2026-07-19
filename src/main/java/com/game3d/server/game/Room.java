@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -28,6 +29,23 @@ public class Room {
 
     /** 봇이 감방문을 여는 사거리(m). 프론트 prisonLayout.DOOR_RANGE 와 같은 값. */
     private static final double BOT_DOOR_RANGE = 3.0;
+
+    /** 복도 절반 폭(m). 프론트 prisonLayout.CORRIDOR_HALF_Z 와 같은 값. */
+    private static final double CORRIDOR_HALF_Z = 2.5;
+
+    /**
+     * 감방 자물쇠 id → 풀면 열리는 감방문 id. 프론트 interactables.ts의 lockbox.opensDoor 와 같다.
+     *
+     * 문을 여는 유일한 경로가 여기다. 클라가 보내는 /door 요청에 기대지 않는 이유:
+     *   - 봇은 클라가 없어 /door를 못 보낸다(그러면 봇은 자기 방에 갇힌다)
+     *   - /door를 그대로 믿으면 퍼즐을 안 풀고 문만 열어달라고 쏘는 게 가능하다
+     */
+    private static final Map<String, String> LOCK_OPENS = Map.of(
+        "lock-A", "cell-A",
+        "lock-B", "cell-B",
+        "lock-C", "cell-C",
+        "lock-D", "cell-D"
+    );
 
     /** 감방 4개의 중심(스폰 기준). 프론트 prisonLayout.CELLS 와 일치. */
     private static final double[][] CELL_CENTERS = {
@@ -154,7 +172,7 @@ public class Room {
             if (p.bot) {
                 // 봇: STOMP 입력 대신 브레인이 이동 의도를 만든다. 이하 이동·충돌은 사람과 공유.
                 // 봇은 아직 달리기/점프를 쓰지 않는다(브레인이 2D 방향만 낸다).
-                double[] mv = p.brain.steer(p, players.values(), solvedIds, nowMs);
+                double[] mv = p.brain.steer(p, players.values(), solvedIds, unreachableFor(p), nowMs);
                 mx = mv[0];
                 mz = mv[1];
             } else {
@@ -199,11 +217,19 @@ public class Room {
             }
 
             if (p.bot) {
-                // 봇도 감방문을 연다. 사람이 F로 하는 근접 판정을 서버가 대신한다.
-                // 열기만 하고 닫지는 않는다 — 닫으면 사람의 토글과 서로 되돌리며 싸운다.
-                // 이게 없으면 봇은 감방에 갇힌 채 문에 밀착해 멈춘다(2026-07-18 회귀).
+                // 자물쇠 앞에서 머무는 시간을 다 채웠으면 이제 푼 것으로 친다.
+                // markSolved가 그 방 문까지 열어 주므로 봇은 곧 나갈 수 있다.
+                String done = p.brain.pollSolved(nowMs);
+                if (done != null) {
+                    log.info("방 {} 봇이 {} 해제", roomId, done);
+                    markSolved(done);
+                }
+
+                // 봇이 근접만으로 문을 여는 길은 막아 뒀다. 예전엔 조건 없이 열었는데, 자물쇠가
+                // 문에서 1.1m라 봇이 지나가며 남의 방까지 다 열어 퍼즐이 통째로 무의미해진다.
+                // 자기 방은 위 markSolved로 열리니 이 경로는 잠기지 않은 문에만 필요하다.
                 String door = Collision.nearestClosedDoor(p.x, p.z, openDoors, BOT_DOOR_RANGE);
-                if (door != null && openDoors.add(door)) {
+                if (door != null && !LOCK_OPENS.containsValue(door) && openDoors.add(door)) {
                     log.info("방 {} 봇이 감방문 {} 열었다", roomId, door);
                 }
 
@@ -219,21 +245,77 @@ public class Room {
         tick++;
     }
 
-    /** 퍼즐 해결 기록(협동). 방 생명주기 동안 유지된다. */
+    /**
+     * 퍼즐 해결 기록(협동). 방 생명주기 동안 유지된다.
+     * 감방 자물쇠였다면 그 방 문도 함께 연다 — 사람·봇이 같은 경로를 타게 하려는 것이다.
+     */
     public void markSolved(String objectId) {
-        if (objectId != null && !objectId.isBlank()) {
-            solvedIds.add(objectId);
+        if (objectId == null || objectId.isBlank()) {
+            return;
+        }
+        solvedIds.add(objectId);
+        String door = LOCK_OPENS.get(objectId);
+        if (door != null && openDoors.add(door)) {
+            log.info("방 {} 자물쇠 {} 해제 → 감방문 {} 열림", roomId, objectId, door);
         }
     }
 
-    /** 감방문 열림 토글(협동). F 요청마다 열림↔닫힘. 열린 문은 충돌에서 제외된다. */
+    /**
+     * 감방문 열림 토글(협동). F 요청마다 열림↔닫힘. 열린 문은 충돌에서 제외된다.
+     *
+     * ⚠️ 자물쇠가 관리하는 감방문(LOCK_OPENS)은 여기서 건드리지 않는다. 그 문의 상태는
+     * {@link #markSolved}가 단독으로 정한다. 프론트는 퍼즐을 풀 때 solve에 이어 door도 보내는데,
+     * 그걸 토글로 받으면 <b>방금 연 문을 곧바로 도로 닫는다</b>(2026-07-19에 실제로 그랬다).
+     * 겸사겸사 퍼즐을 건너뛰고 door만 쏘아 여는 길도 막힌다.
+     */
     public void toggleDoor(String doorId) {
-        if (doorId == null || doorId.isBlank()) {
+        if (doorId == null || doorId.isBlank() || LOCK_OPENS.containsValue(doorId)) {
             return;
         }
         if (!openDoors.remove(doorId)) {
             openDoors.add(doorId);
         }
+    }
+
+    /**
+     * 이 봇이 지금 갈 수 없는 대상의 id — <b>POI와 사람을 함께</b> 담는다(둘 다 goal의 targetId라서).
+     *
+     * 안 풀린 감방 자물쇠는 항상 잠긴 문 뒤에 있고(그 문을 여는 게 바로 그 자물쇠라서), 그 방 안에
+     * 있는 사람도 마찬가지로 못 닿는다. 같은 감방 안에 있지 않으면 둘 다 도달 불가다.
+     *
+     * 빼 주지 않으면 봇이 열 수 없는 문 앞에 붙어 멈춘다(2026-07-18 정지 회귀와 같은 모양).
+     * 자물쇠만 걸렀다가 <b>잠긴 방 안의 사람을 따라가려다</b> 같은 증상이 재현된 적 있다(2026-07-19).
+     */
+    private Set<String> unreachableFor(Player self) {
+        Set<String> out = null;
+        for (String lockId : LOCK_OPENS.keySet()) {
+            if (solvedIds.contains(lockId)) {
+                continue; // 문이 열렸으니 그 방 안의 것은 모두 닿는다
+            }
+            Interactables.Poi lock = Interactables.find(lockId);
+            if (lock == null || sameCell(self.x, self.z, lock.x(), lock.z())) {
+                continue; // 내가 그 방 안이면 자물쇠도 사람도 닿는다
+            }
+            if (out == null) {
+                out = new HashSet<>();
+            }
+            out.add(lockId);
+            for (Player other : players.values()) {
+                if (!other.bot && sameCell(other.x, other.z, lock.x(), lock.z())) {
+                    out.add(other.id);
+                }
+            }
+        }
+        return out == null ? Set.of() : out;
+    }
+
+    /**
+     * 두 점이 같은 감방인지. 감방은 감방블록(|x|&lt;14, |z|&lt;11)을 복도(|z|&le;2.5)로 가른
+     * 네 사분면이다. 복도·통로에 서 있으면 어느 감방에도 속하지 않는다.
+     */
+    private static boolean sameCell(double ax, double az, double bx, double bz) {
+        return Math.abs(ax) < 14 && Math.abs(az) < 11 && Math.abs(az) > CORRIDOR_HALF_Z
+                && (ax < 0) == (bx < 0) && (az < 0) == (bz < 0);
     }
 
     public WorldSnapshot snapshot(long nowMs) {
