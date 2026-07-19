@@ -2,6 +2,8 @@ package com.game3d.server.game;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.List;
+
 /** application.yml의 game.bot.* 설정. */
 @ConfigurationProperties(prefix = "game.bot")
 public record BotProperties(Llm llm) {
@@ -15,10 +17,19 @@ public record BotProperties(Llm llm) {
      */
     public record Llm(
             boolean enabled,
-            String model,
+            /**
+             * 돌려 쓸 모델 목록. 호출마다 라운드 로빈으로 고른다.
+             *
+             * Groq 무료 한도는 <b>모델별</b>로 따로 걸린다. 그래서 모델을 나눠 쓰면 TPM 상한이
+             * 사실상 모델 수만큼 늘어난다. 반대로 같은 계정의 API 키를 여러 개 만들어 돌리는 건
+             * 소용없다 — 키가 아니라 조직 단위로 재기 때문이다.
+             */
+            List<String> models,
             String baseUrl,
             String apiKey,
             long intervalMs,
-            long timeoutMs
+            long timeoutMs,
+            /** 429(한도 초과)를 받은 모델을 이 시간 동안 건너뛴다. */
+            long cooldownMs
     ) {}
 }

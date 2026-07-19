@@ -16,6 +16,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Groq(OpenAI 호환 API)로 다음 목표를 정하는 느린 층.
@@ -53,6 +57,12 @@ class GroqBotPlanner implements BotPlanner {
     private final ObjectMapper json;
     private final BotProperties.Llm cfg;
 
+    /** 라운드 로빈 커서. 여러 봇이 가상 스레드에서 동시에 호출한다. */
+    private final AtomicInteger cursor = new AtomicInteger();
+
+    /** 429를 받은 모델의 재시도 가능 시각(ms). 그 전까지는 건너뛴다. */
+    private final Map<String, Long> cooldownUntil = new ConcurrentHashMap<>();
+
     GroqBotPlanner(ObjectMapper json, BotProperties props) {
         this.json = json;
         this.cfg = props.llm();
@@ -61,27 +71,51 @@ class GroqBotPlanner implements BotPlanner {
                 .build();
     }
 
+    /**
+     * 이번 호출에 쓸 모델. 라운드 로빈으로 돌되 한도에 걸린(cooldown 중인) 모델은 건너뛴다.
+     * 전부 쿨다운이면 그냥 다음 차례를 쓴다 — 어차피 실패하겠지만 BotBrain이 삼키고,
+     * 여기서 임의로 기다리면 tick 스레드가 아닌 가상 스레드가 쌓이기만 한다.
+     */
+    private String nextModel() {
+        List<String> models = cfg.models();
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < models.size(); i++) {
+            String m = models.get(Math.floorMod(cursor.getAndIncrement(), models.size()));
+            Long until = cooldownUntil.get(m);
+            if (until == null || now >= until) {
+                return m;
+            }
+        }
+        return models.get(Math.floorMod(cursor.getAndIncrement(), models.size()));
+    }
+
     @Override
     public Goal plan(BotContext ctx) throws IOException, InterruptedException {
+        String model = nextModel();
         HttpRequest req = HttpRequest.newBuilder(URI.create(cfg.baseUrl() + "/chat/completions"))
                 .timeout(Duration.ofMillis(cfg.timeoutMs()))
                 .header("Authorization", "Bearer " + cfg.apiKey())
                 .header("Content-Type", "application/json; charset=utf-8")
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody(ctx), StandardCharsets.UTF_8))
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody(ctx, model), StandardCharsets.UTF_8))
                 .build();
 
         HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (res.statusCode() != 200) {
             // 429(한도)·401(키) 모두 여기로. 봇은 스크립트 목표로 계속 움직이므로 게임은 멈추지 않는다.
-            throw new IOException("Groq " + res.statusCode() + ": " + res.body());
+            if (res.statusCode() == 429) {
+                // 이 모델은 잠시 쉬게 두고 다음 호출은 다른 모델로 간다.
+                cooldownUntil.put(model, System.currentTimeMillis() + cfg.cooldownMs());
+                log.warn("Groq 한도 초과({}) → {}ms 동안 이 모델 건너뜀", model, cfg.cooldownMs());
+            }
+            throw new IOException("Groq " + res.statusCode() + " (" + model + "): " + res.body());
         }
 
         String content = json.readTree(res.body()).path("choices").path(0).path("message").path("content").asString("");
-        return parseGoal(content);
+        return parseGoal(content, model);
     }
 
     /** 월드 상태를 최소 토큰으로 직렬화. 필드를 늘리기 전에 BotProperties의 한도 계산을 다시 볼 것. */
-    private String requestBody(BotContext ctx) {
+    private String requestBody(BotContext ctx, String model) {
         ObjectNode self = json.createObjectNode();
         self.put("x", round(ctx.x()));
         self.put("z", round(ctx.z()));
@@ -124,7 +158,7 @@ class GroqBotPlanner implements BotPlanner {
         user.put("content", json.writeValueAsString(state));
 
         ObjectNode body = json.createObjectNode();
-        body.put("model", cfg.model());
+        body.put("model", model);
         body.put("temperature", 0.3);
         // gpt-oss는 추론 모델이라 답 앞에 추론 토큰을 쓴다. 조이면 JSON을 못 끝내고 Groq이
         // 400 json_validate_failed를 뱉는다. 상한일 뿐이라 실제 한도/과금은 쓴 만큼만 잡힌다 → 넉넉히 준다.
@@ -144,7 +178,7 @@ class GroqBotPlanner implements BotPlanner {
     }
 
     /** 모델 응답 → Goal. 스키마를 벗어나면 null(호출자가 기존 목표 유지). targetId 검증은 BotBrain이 한다. */
-    private Goal parseGoal(String content) {
+    private Goal parseGoal(String content, String model) {
         try {
             JsonNode n = json.readTree(content);
             Goal.Action action = Goal.Action.valueOf(n.path("action").asString(""));
@@ -152,7 +186,7 @@ class GroqBotPlanner implements BotPlanner {
             JsonNode t = n.path("targetId");
             String targetId = t.isNull() || t.isMissingNode() ? null : t.asString(null);
             if (log.isDebugEnabled()) {
-                log.debug("봇 계획: {} {} ({})", action, targetId, n.path("reason").asString(""));
+                log.debug("봇 계획[{}]: {} {} ({})", model, action, targetId, n.path("reason").asString(""));
             }
             return action == Goal.Action.IDLE ? Goal.IDLE : new Goal(action, targetId);
         } catch (IllegalArgumentException | JacksonException e) {

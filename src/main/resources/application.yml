@@ -71,11 +71,21 @@ game:
       # 기본 off. 켜두면 브라우저만 열어놔도 무료 한도가 샌다(방마다 봇이 자동 스폰됨).
       # 켤 때: GROQ_API_KEY 환경변수 + game.bot.llm.enabled=true
       enabled: false
-      # llama-3.1-8b-instant는 한도가 14배 넉넉하지만 2026-08-16 종료(무료·개발자 티어)라 안 쓴다.
+      # 호출마다 라운드 로빈으로 고른다. Groq 무료 한도는 모델별로 따로 걸리므로,
+      # 나눠 쓰면 TPM 상한이 사실상 모델 수만큼 늘어난다.
+      #   ⚠️ 같은 계정의 API 키를 여러 개 만들어 돌리는 건 소용없다 — 한도는 키가 아니라
+      #      조직 단위로 잡힌다. 늘릴 수 있는 축은 모델이지 키가 아니다.
       # gpt-oss-20b 무료 한도 실측(2026-07): 1,000 요청/일 · 8,000 토큰/분.
-      model: openai/gpt-oss-20b
+      # llama-3.1-8b-instant는 한도가 14배 넉넉하지만 2026-08-16 종료(무료·개발자 티어)라
+      # 주력으로 두지 않고 보조로만 섞는다. 종료되면 목록에서 빼면 된다.
+      models:
+        - openai/gpt-oss-20b
+        - llama-3.3-70b-versatile
+        - llama-3.1-8b-instant
       base-url: https://api.groq.com/openai/v1
       api-key: ${GROQ_API_KEY:}
+      # 429를 받은 모델을 이 시간 동안 건너뛴다. TPM은 분 단위로 회복되므로 60초로 잡았다.
+      cooldown-ms: 60000
       # 1,000 요청/일 ÷ 10콜/분 = 봇 켜둔 채로 하루 100분. 15분 플레이 기준 6~7판.
       # 토큰은 약 500/콜 × 10콜/분 ≈ 5,000 TPM으로 8,000 한도 안쪽.
       interval-ms: 6000
