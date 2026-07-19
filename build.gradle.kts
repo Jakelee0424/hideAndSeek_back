@@ -27,6 +27,12 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
+tasks.withType<JavaCompile> {
+    // @DestinationVariable/@PathVariable 등이 파라미터 이름을 리플렉션으로 읽는다.
+    // 이 플래그가 없으면 이름 정보가 사라져 STOMP/REST 핸들러가 런타임에 터진다.
+    options.compilerArgs.add("-parameters")
+}
+
 tasks.withType<Test> {
     useJUnitPlatform()
 }

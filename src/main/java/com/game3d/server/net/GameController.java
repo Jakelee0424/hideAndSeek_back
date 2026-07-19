@@ -43,7 +43,7 @@ public class GameController {
      * 대기 화면을 건너뛰고 곧장 STOMP로 붙는 것을 막을 수 없어 게이트가 장식이 된다.
      */
     @MessageMapping("/rooms/{roomId}/join")
-    public void join(@DestinationVariable String roomId,
+    public void join(@DestinationVariable("roomId") String roomId,
                      @Payload JoinMessage msg,
                      SimpMessageHeaderAccessor accessor) {
         if (!queue.admitOnJoin(msg.id(), msg.token())) {
@@ -62,7 +62,7 @@ public class GameController {
 
     /** 클라 → 서버: 이동 의도. /app/rooms/{roomId}/input */
     @MessageMapping("/rooms/{roomId}/input")
-    public void input(@DestinationVariable String roomId,
+    public void input(@DestinationVariable("roomId") String roomId,
                       @Payload InputMessage msg,
                       SimpMessageHeaderAccessor accessor) {
         Room room = roomManager.get(roomId);
@@ -82,7 +82,7 @@ public class GameController {
     /** 클라 → 서버: 퍼즐 해결(협동 동기화). /app/rooms/{roomId}/solve
      *  해결 상태는 GameLoop의 스냅샷(solvedIds)으로 방 전체에 전파된다. */
     @MessageMapping("/rooms/{roomId}/solve")
-    public void solve(@DestinationVariable String roomId, @Payload SolveMessage msg) {
+    public void solve(@DestinationVariable("roomId") String roomId, @Payload SolveMessage msg) {
         Room room = roomManager.get(roomId);
         if (room != null && msg != null) {
             room.markSolved(msg.objectId());
@@ -91,7 +91,7 @@ public class GameController {
 
     /** 클라 → 서버: 감방문 열림 토글. /app/rooms/{roomId}/door */
     @MessageMapping("/rooms/{roomId}/door")
-    public void door(@DestinationVariable String roomId, @Payload DoorMessage msg) {
+    public void door(@DestinationVariable("roomId") String roomId, @Payload DoorMessage msg) {
         Room room = roomManager.get(roomId);
         if (room != null && msg != null) {
             room.toggleDoor(msg.doorId());

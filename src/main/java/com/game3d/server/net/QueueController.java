@@ -42,14 +42,14 @@ public class QueueController {
 
     /** 폴링. 대기열에서 사라졌으면(만료 등) 404 → 클라는 다시 enter를 부른다. */
     @GetMapping("/{playerId}")
-    public ResponseEntity<QueueTicket> status(@PathVariable String playerId) {
+    public ResponseEntity<QueueTicket> status(@PathVariable("playerId") String playerId) {
         QueueTicket ticket = queue.status(playerId);
         return ticket == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(ticket);
     }
 
     /** 대기 취소 / 자리 반납. 브라우저를 닫는 경우는 WS 종료 이벤트가 대신 처리한다. */
     @DeleteMapping("/{playerId}")
-    public ResponseEntity<Void> leave(@PathVariable String playerId) {
+    public ResponseEntity<Void> leave(@PathVariable("playerId") String playerId) {
         queue.release(playerId);
         return ResponseEntity.noContent().build();
     }
