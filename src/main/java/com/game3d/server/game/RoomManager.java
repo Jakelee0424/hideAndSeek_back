@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,8 +42,36 @@ public class RoomManager {
                 phaseProps.totalMs() / 60_000);
     }
 
+    /**
+     * 테스트 방의 단계 길이. 혼자 들어가 결말(투표)까지 2분 남짓에 확인하려는 용도다.
+     * 정식 20분을 다 기다리면 투표 화면을 볼 수가 없다.
+     */
+    private static final PhaseProperties TEST_PHASES = new PhaseProperties(
+            Duration.ofSeconds(15),  // 온보딩
+            Duration.ofSeconds(60),  // 개별 미션
+            Duration.ofSeconds(15),  // 정보 공유
+            Duration.ofSeconds(45)   // AI 투표
+    );
+
+    /**
+     * 이 코드로 만든 방은 <b>대기 없이 바로 시작</b>하고 단계도 짧게 돈다.
+     *
+     * 정식 흐름은 전원 준비 → 방장 시작이라 혼자서는 게임을 볼 수 없다. 개발·시연 점검용
+     * 뒷문이다. 방 코드는 대문자로 비교한다(로비가 입력을 대문자로 바꿔 보낸다).
+     */
+    private boolean isTestRoom(String roomId) {
+        String code = props.testRoomCode();
+        return code != null && !code.isBlank() && code.equalsIgnoreCase(roomId);
+    }
+
     public Room getOrCreate(String roomId) {
-        return rooms.computeIfAbsent(roomId, id -> new Room(id, props, phaseProps, llm, planIntervalMs));
+        return rooms.computeIfAbsent(roomId, id -> {
+            boolean test = isTestRoom(id);
+            if (test) {
+                log.info("테스트 방 {} 생성 — 즉시 시작 + 단축 단계({}초)", id, TEST_PHASES.totalMs() / 1000);
+            }
+            return new Room(id, props, test ? TEST_PHASES : phaseProps, llm, planIntervalMs, test);
+        });
     }
 
     public Room get(String roomId) {

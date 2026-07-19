@@ -117,12 +117,17 @@ public class Room {
     private final BotPlanner llm;
     private final long planIntervalMs;
 
-    Room(String roomId, GameProperties props, PhaseProperties phaseProps, BotPlanner llm, long planIntervalMs) {
+    /** 테스트 방이면 준비·시작을 기다리지 않고 첫 입장에서 바로 시작한다. */
+    private final boolean autoStart;
+
+    Room(String roomId, GameProperties props, PhaseProperties phaseProps, BotPlanner llm,
+         long planIntervalMs, boolean autoStart) {
         this.roomId = roomId;
         this.props = props;
         this.phases = new PhaseTimeline(phaseProps);
         this.llm = llm;
         this.planIntervalMs = planIntervalMs;
+        this.autoStart = autoStart;
     }
 
     public String roomId() {
@@ -180,6 +185,11 @@ public class Room {
         rosterDirty.set(true); // 다음 스냅샷에 로스터 1회 재전송
         phaseDirty.set(true);  // 중간 입장자에게 현재 단계·남은 시간 1회 전송
         readyDirty.set(true);  // 새로 들어온 사람도 남들의 준비 상태를 봐야 한다
+        // 테스트 방은 준비·시작을 기다리지 않는다. 단계가 LOBBY를 벗어나면 프론트가 알아서
+        // 게임 화면으로 넘겨주므로(대기방의 phase 감시), 클라는 손볼 게 없다.
+        if (autoStart) {
+            startRequested = true;
+        }
         return true;
     }
 

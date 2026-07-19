@@ -18,7 +18,12 @@ public record GameProperties(
          * 대기열(game.queue.capacity)은 서버 전체 동시 접속을 재는 값이라 방 정원이 아니다.
          * 방을 막는 건 여기다.
          */
-        int maxPlayersPerRoom
+        int maxPlayersPerRoom,
+        /**
+         * 이 방 코드로 들어가면 대기 없이 바로 시작하고 단계도 짧게 돈다(개발·시연 점검용).
+         * 비워 두면 뒷문이 닫힌다.
+         */
+        String testRoomCode
 ) {
     public double tickSeconds() {
         return tickMs / 1000.0;
