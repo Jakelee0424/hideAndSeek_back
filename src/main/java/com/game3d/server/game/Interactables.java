@@ -43,7 +43,13 @@ final class Interactables {
             new Poi("note-C1", -11, -9.5, false, false, "긁힌 쪽지(3호실)"),
             new Poi("note-C2", -4, -9.0, false, false, "벽 낙서(3호실)"),
             new Poi("note-D1", 11, -9.5, false, false, "낡은 쪽지(4호실)"),
-            new Poi("note-D2", 4, -9.0, false, false, "벽 그림(4호실)")
+            new Poi("note-D2", 4, -9.0, false, false, "벽 그림(4호실)"),
+            // 최종 탈옥문과 그 단서. 단서는 감방 밖이라 누구나 닿는다.
+            // 탈옥문은 botSolvable=false — 봇이 열면 봇이 게임을 끝내 버린다.
+            new Poi("note-mess", -35, 7, false, false, "배식 당번표(식당)"),
+            new Poi("note-west", -20, 1.5, false, false, "순찰 일지(서통로)"),
+            new Poi("note-yard", 38, -8, false, false, "담벼락 자국(운동장)"),
+            new Poi("escape-gate", 42, 0, true, false, "탈옥문(운동장, 최종 탈출구)")
     );
 
     private Interactables() {}

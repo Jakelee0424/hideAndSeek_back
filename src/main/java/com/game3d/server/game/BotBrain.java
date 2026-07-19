@@ -170,9 +170,11 @@ final class BotBrain {
                 return STOP;
             }
 
-            // 쪽지면 잠깐 읽고 간다. readDoneId로 "이번 목표에선 이미 읽었다"를 표시하지 않으면
-            // 읽기가 끝난 다음 tick에 같은 자리에서 또 읽기가 걸려 그 쪽지를 영영 못 떠난다.
-            if (arrived != null && !arrived.solvable() && !arrived.id().equals(readDoneId)) {
+            // 스스로 풀 수 없는 것(쪽지, 그리고 사람이 열어야 하는 탈옥문) 앞에서는 잠깐 살펴본다.
+            // solvable 기준으로 잡으면 탈옥문이 위 해제 분기와 여기 사이로 빠져 아무 대기 없이
+            // 도착하자마자 돌아선다. readDoneId로 "이번 목표에선 이미 봤다"를 표시하지 않으면
+            // 대기가 끝난 다음 tick에 같은 자리에서 또 걸려 그 지점을 영영 못 떠난다.
+            if (arrived != null && !arrived.botSolvable() && !arrived.id().equals(readDoneId)) {
                 readingUntilMs = nowMs + READ_DWELL_MS;
                 readDoneId = arrived.id();
                 return STOP;
