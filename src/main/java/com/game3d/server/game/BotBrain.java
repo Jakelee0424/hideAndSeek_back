@@ -104,9 +104,13 @@ final class BotBrain {
     /**
      * 머무는 시간을 다 채운 자물쇠 id를 <b>한 번만</b> 돌려준다. 아직이거나 없으면 null.
      * Room이 tick마다 수거해 solvedIds에 넣고 그 방 문을 연다.
+     *
+     * @param notBeforeMs 이 시각 전에는 해제하지 않는다. Room이 "첫 사람이 나간 뒤 N초"를
+     *                    여기로 넘긴다. 아직 아무도 안 나왔으면 Long.MAX_VALUE라 계속 기다린다.
+     *                    조건이 안 맞으면 상태를 지우지 않는다 — 다음 tick에 다시 판정해야 한다.
      */
-    String pollSolved(long nowMs) {
-        if (solvingId == null || nowMs < solvingUntilMs) {
+    String pollSolved(long nowMs, long notBeforeMs) {
+        if (solvingId == null || nowMs < solvingUntilMs || nowMs < notBeforeMs) {
             return null;
         }
         String done = solvingId;
@@ -242,6 +246,29 @@ final class BotBrain {
             goal = Goal.gotoPuzzle(next.id());
             return;
         }
+
+        // 풀 게 없으면 쪽지를 읽으러 다닌다. 이게 없으면 자물쇠가 다 풀린 뒤로는 아래 따라가기만
+        // 남아, 봇이 게임 내내 사람 뒤를 졸졸 따라다닌다.
+        Interactables.Poi note = Interactables.nearestUnvisitedNote(self.x, self.z, skip);
+        if (note != null) {
+            goal = Goal.gotoNote(note.id());
+            return;
+        }
+
+        // 닿는 쪽지를 다 읽었으면 기록을 비우고 곧바로 다시 고른다. 비우기만 하고 아래로
+        // 떨어지면 그 tick에 따라가기 목표가 잡히고, 따라가기는 도착해도 끝나지 않아서
+        // 두 번 다시 쪽지를 고를 일이 없다 — 초기화가 무의미해진다.
+        if (!visited.isEmpty()) {
+            visited.clear();
+            Interactables.Poi again = Interactables.nearestUnvisitedNote(self.x, self.z, blocked);
+            if (again != null) {
+                log.debug("봇이 닿는 쪽지를 다 봤다 — 순회 다시 시작");
+                goal = Goal.gotoNote(again.id());
+                return;
+            }
+        }
+
+        // 여기까지 오면 닿는 쪽지가 아예 없다(잠긴 방에 다 갇혀 있음). 그때만 사람을 따라간다.
         Player mate = nearestHuman(self, players);
         goal = mate == null ? Goal.IDLE : Goal.followPlayer(mate.id);
     }

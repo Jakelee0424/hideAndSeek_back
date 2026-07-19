@@ -34,6 +34,14 @@ public class Room {
     private static final double CORRIDOR_HALF_Z = 2.5;
 
     /**
+     * 첫 사람이 감방을 연 뒤 봇이 자기 방을 열기까지 기다리는 시간(ms).
+     *
+     * 봇이 먼저 나오면 사람이 아직 퍼즐과 씨름하는 동안 AI가 앞서가는 그림이 된다. 사람이 하나
+     * 나온 뒤에, 그것도 곧바로 말고 조금 뒤에 따라 나와야 "옆방도 푸는 중이었구나"로 읽힌다.
+     */
+    private static final long BOT_FOLLOW_DELAY_MS = 10_000;
+
+    /**
      * 감방 자물쇠 id → 풀면 열리는 감방문 id. 프론트 interactables.ts의 lockbox.opensDoor 와 같다.
      *
      * 문을 여는 유일한 경로가 여기다. 클라가 보내는 /door 요청에 기대지 않는 이유:
@@ -69,6 +77,10 @@ public class Room {
     // 입장 때도 세운다: 중간에 들어온 사람도 현재 단계를 받아야 한다.
     private final AtomicBoolean phaseDirty = new AtomicBoolean(true);
     private long tick;
+
+    // 첫 감방문이 열린 시각(ms). 0이면 아직 아무도 못 나왔다. 봇 탈출 지연의 기준점.
+    // 컨트롤러 스레드(사람 solve)에서 쓰고 루프 스레드(tick)에서 읽는다.
+    private volatile long firstCellOpenedAtMs;
 
     /** 진행 단계 시계. 루프 스레드(tick)에서만 만진다. */
     private final PhaseTimeline phases;
@@ -217,9 +229,13 @@ public class Room {
             }
 
             if (p.bot) {
-                // 자물쇠 앞에서 머무는 시간을 다 채웠으면 이제 푼 것으로 친다.
-                // markSolved가 그 방 문까지 열어 주므로 봇은 곧 나갈 수 있다.
-                String done = p.brain.pollSolved(nowMs);
+                // 자물쇠 앞에서 머무는 시간을 다 채웠고, 첫 사람이 나간 지 충분히 지났으면
+                // 이제 푼 것으로 친다. markSolved가 그 방 문까지 열어 주므로 봇은 곧 나갈 수 있다.
+                // 아무도 못 나왔으면(0) 봇은 자물쇠 앞에서 계속 기다린다 — 푸는 중처럼 보인다.
+                long notBefore = firstCellOpenedAtMs == 0
+                        ? Long.MAX_VALUE
+                        : firstCellOpenedAtMs + BOT_FOLLOW_DELAY_MS;
+                String done = p.brain.pollSolved(nowMs, notBefore);
                 if (done != null) {
                     log.info("방 {} 봇이 {} 해제", roomId, done);
                     markSolved(done);
@@ -257,6 +273,11 @@ public class Room {
         String door = LOCK_OPENS.get(objectId);
         if (door != null && openDoors.add(door)) {
             log.info("방 {} 자물쇠 {} 해제 → 감방문 {} 열림", roomId, objectId, door);
+            // 봇의 탈출 타이머는 첫 감방이 열린 시각부터 센다. 봇은 이 시각이 찍히기 전엔
+            // 자기 자물쇠를 풀지 않으므로(tick의 pollSolved 참조) 여기 찍히는 건 항상 사람이다.
+            if (firstCellOpenedAtMs == 0) {
+                firstCellOpenedAtMs = System.currentTimeMillis();
+            }
         }
     }
 
@@ -294,12 +315,18 @@ public class Room {
             }
             Interactables.Poi lock = Interactables.find(lockId);
             if (lock == null || sameCell(self.x, self.z, lock.x(), lock.z())) {
-                continue; // 내가 그 방 안이면 자물쇠도 사람도 닿는다
+                continue; // 내가 그 방 안이면 자물쇠도 쪽지도 사람도 닿는다
             }
             if (out == null) {
                 out = new HashSet<>();
             }
-            out.add(lockId);
+            // 잠긴 방 안의 것 전부. 자물쇠만 빼고 쪽지를 남겨두면 LLM이 GOTO_NOTE로 그 방
+            // 쪽지를 골라(운영 로그에서 실제로 그런다) 봇이 남의 감방문 앞에 박힌다.
+            for (Interactables.Poi poi : Interactables.all()) {
+                if (sameCell(poi.x(), poi.z(), lock.x(), lock.z())) {
+                    out.add(poi.id());
+                }
+            }
             for (Player other : players.values()) {
                 if (!other.bot && sameCell(other.x, other.z, lock.x(), lock.z())) {
                     out.add(other.id);

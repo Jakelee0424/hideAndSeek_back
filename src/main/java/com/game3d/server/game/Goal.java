@@ -25,6 +25,10 @@ record Goal(Action action, String targetId) {
         return new Goal(Action.GOTO_PUZZLE, puzzleId);
     }
 
+    static Goal gotoNote(String noteId) {
+        return new Goal(Action.GOTO_NOTE, noteId);
+    }
+
     static Goal followPlayer(String playerId) {
         return new Goal(Action.FOLLOW_PLAYER, playerId);
     }

@@ -68,6 +68,30 @@ final class Interactables {
      * exclude에 "직전 한 곳"이 아니라 "다녀온 곳 전부"를 넘겨야 한다. 해결 가능한 지점이 둘뿐인데
      * 직전만 빼면 남는 건 항상 반대쪽 하나 → 두 곳을 영원히 왕복한다(2026-07 실측).
      */
+    /**
+     * exclude에 없는 <b>쪽지</b>(solvable=false) 중 (x,z)에서 최근접. 후보가 없으면 null.
+     *
+     * 자물쇠가 다 풀리고 나면 해결할 게 없어져 봇이 사람만 졸졸 따라다닌다. 그때 읽을 쪽지를
+     * 주려는 것이다. 호출부가 "다녀온 곳"을 exclude로 넘기므로 같은 쪽지를 반복해 고르지 않는다.
+     */
+    static Poi nearestUnvisitedNote(double x, double z, Set<String> exclude) {
+        Poi best = null;
+        double bestD2 = Double.MAX_VALUE;
+        for (Poi p : ALL) {
+            if (p.solvable() || exclude.contains(p.id())) {
+                continue;
+            }
+            double dx = p.x() - x;
+            double dz = p.z() - z;
+            double d2 = dx * dx + dz * dz;
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                best = p;
+            }
+        }
+        return best;
+    }
+
     static Poi nearestUnsolved(double x, double z, Set<String> solved, Set<String> exclude) {
         Poi best = null;
         double bestD2 = Double.MAX_VALUE;
