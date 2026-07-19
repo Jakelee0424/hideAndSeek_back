@@ -3,6 +3,7 @@ package com.game3d.server.net;
 import com.game3d.server.dto.DoorMessage;
 import com.game3d.server.dto.InputMessage;
 import com.game3d.server.dto.JoinMessage;
+import com.game3d.server.dto.ReadyMessage;
 import com.game3d.server.dto.SolveMessage;
 import com.game3d.server.dto.Vec3;
 import com.game3d.server.dto.VoteMessage;
@@ -91,6 +92,35 @@ public class GameController {
         Room room = roomManager.get(roomId);
         if (room != null && msg != null) {
             room.markSolved(msg.objectId());
+        }
+    }
+
+    /** 클라 → 서버: 대기방 준비 토글. /app/rooms/{roomId}/ready */
+    @MessageMapping("/rooms/{roomId}/ready")
+    public void ready(@DestinationVariable("roomId") String roomId,
+                      @Payload ReadyMessage msg,
+                      SimpMessageHeaderAccessor accessor) {
+        Room room = roomManager.get(roomId);
+        Map<String, Object> attrs = accessor.getSessionAttributes();
+        if (room == null || msg == null || attrs == null
+                || !(attrs.get(ATTR_PLAYER) instanceof String playerId)) {
+            return;
+        }
+        room.setReady(playerId, msg.readyOrTrue());
+    }
+
+    /**
+     * 클라 → 서버: 게임 시작. /app/rooms/{roomId}/start
+     *
+     * 전원이 준비되지 않았으면 조용히 무시한다. 시작하면 단계가 LOBBY를 벗어나고, 그 전환이
+     * 스냅샷으로 방 전체에 퍼져 모두가 함께 게임 화면으로 넘어간다 — 누른 사람만 넘어가면
+     * 나머지는 대기방에 남는다(예전 동작).
+     */
+    @MessageMapping("/rooms/{roomId}/start")
+    public void start(@DestinationVariable("roomId") String roomId) {
+        Room room = roomManager.get(roomId);
+        if (room != null) {
+            room.requestStart();
         }
     }
 

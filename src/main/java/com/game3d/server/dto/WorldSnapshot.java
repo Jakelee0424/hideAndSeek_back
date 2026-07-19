@@ -15,6 +15,7 @@ import java.util.List;
  *                  매 tick 실으면 20Hz 내내 따라붙고, 절대 시각을 주면 클라 시계 오차를 탄다.
  *   votes:     AI 지목 현황. 로스터와 같은 규약 — 바뀔 때만 포함.
  *   aiId:      진짜 AI의 id. <b>ENDED 단계에서만</b> 실린다. 그 전에 주면 투표가 무의미해진다.
+ *   readyIds:  대기방에서 준비를 마친 사람들. 로스터와 같은 규약 — 바뀔 때만 포함.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record WorldSnapshot(
@@ -26,5 +27,6 @@ public record WorldSnapshot(
         String phase,
         Long phaseRemainMs,
         List<VoteEntry> votes,
-        String aiId
+        String aiId,
+        List<String> readyIds
 ) {}

@@ -98,6 +98,14 @@ public class Room {
     private final Map<String, String> votes = new ConcurrentHashMap<>();
     private final AtomicBoolean votesDirty = new AtomicBoolean();
 
+    // 준비 완료를 누른 사람들. 대기방에서만 의미가 있다.
+    private final Set<String> ready = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean readyDirty = new AtomicBoolean();
+
+    // 시작 요청. 컨트롤러 스레드가 세우고 루프 스레드(tick)가 소비한다 —
+    // PhaseTimeline은 루프 스레드 전용이라 컨트롤러가 직접 시작시키면 규약이 깨진다.
+    private volatile boolean startRequested;
+
     // 입장 순서. players는 ConcurrentHashMap이라 순회 순서가 입장 순이 아니다.
     // 방장을 "먼저 들어온 사람"으로 뽑으려면 순서를 따로 들고 있어야 한다.
     private final List<String> joinOrder = new CopyOnWriteArrayList<>();
@@ -171,6 +179,7 @@ public class Room {
         // 봇까지 넣은 뒤에 세워야 로스터에 봇 닉이 함께 실린다.
         rosterDirty.set(true); // 다음 스냅샷에 로스터 1회 재전송
         phaseDirty.set(true);  // 중간 입장자에게 현재 단계·남은 시간 1회 전송
+        readyDirty.set(true);  // 새로 들어온 사람도 남들의 준비 상태를 봐야 한다
         return true;
     }
 
@@ -205,6 +214,45 @@ public class Room {
         return BOT_NICKS[start];
     }
 
+    /** 대기방 준비 토글. */
+    public void setReady(String id, boolean value) {
+        if (id == null || !players.containsKey(id)) {
+            return;
+        }
+        if (value ? ready.add(id) : ready.remove(id)) {
+            readyDirty.set(true);
+        }
+    }
+
+    /** 사람이 한 명 이상이고 그 전원이 준비를 마쳤는가. 봇은 세지 않는다. */
+    public boolean allReady() {
+        int humans = 0;
+        for (Player p : players.values()) {
+            if (p.bot) {
+                continue;
+            }
+            humans++;
+            if (!ready.contains(p.id)) {
+                return false;
+            }
+        }
+        return humans > 0;
+    }
+
+    /**
+     * 게임 시작 요청. 전원이 준비됐을 때만 받아들인다.
+     * 실제 시작은 다음 tick이 한다(위 startRequested 주석 참고).
+     *
+     * @return 요청이 받아들여졌으면 true.
+     */
+    public boolean requestStart() {
+        if (!allReady()) {
+            return false;
+        }
+        startRequested = true;
+        return true;
+    }
+
     /** AI 지목 투표. 다시 찍으면 덮어쓴다. 자기 자신은 못 찍는다. */
     public void castVote(String voterId, String targetId) {
         if (voterId == null || targetId == null || voterId.equals(targetId)
@@ -232,7 +280,9 @@ public class Room {
             joinOrder.remove(id);
             votes.remove(id);   // 나간 사람의 표는 무효
             votes.values().removeIf(id::equals); // 나간 사람을 지목한 표도 무효
+            ready.remove(id);   // 안 그러면 나간 사람이 "준비됨"으로 남아 정원 판정이 어긋난다
             votesDirty.set(true);
+            readyDirty.set(true);
             rosterDirty.set(true);
         }
     }
@@ -248,6 +298,15 @@ public class Room {
 
     /** 한 tick 진행: 진행 단계를 갱신하고, 각 플레이어의 이동 의도를 검증·적용한다. */
     public void tick(long nowMs) {
+        // 시작 요청 소비. 여기(루프 스레드)에서만 시계를 건드린다.
+        if (startRequested) {
+            startRequested = false;
+            if (phases.start(nowMs)) {
+                phaseDirty.set(true);
+                log.info("방 {} 게임 시작 → {}", roomId, phases.phase());
+            }
+        }
+
         // 단계 전이는 경과 시간으로만 결정된다(PhaseTimeline). 바뀐 tick에만 스냅샷에 싣는다.
         if (phases.advance(nowMs)) {
             phaseDirty.set(true);
@@ -474,7 +533,10 @@ public class Room {
                 voteList.add(new VoteEntry(e.getKey(), e.getValue()));
             }
         }
+        // 준비 상태도 같은 규약. 대기방에서만 쓰이지만 게임 중에도 굳이 지우지는 않는다.
+        List<String> readyIds = readyDirty.getAndSet(false) ? new ArrayList<>(ready) : null;
+
         return new WorldSnapshot(tick, states, roster, new ArrayList<>(solvedIds),
-                new ArrayList<>(openDoors), phase, phaseRemainMs, voteList, aiId);
+                new ArrayList<>(openDoors), phase, phaseRemainMs, voteList, aiId, readyIds);
     }
 }

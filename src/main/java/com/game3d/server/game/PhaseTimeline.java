@@ -12,21 +12,43 @@ class PhaseTimeline {
 
     private final PhaseProperties props;
 
-    /** 0이면 아직 시작 전. 첫 tick(=첫 사람 입장 직후)에 찍힌다. */
+    /**
+     * 0이면 아직 시작 전(LOBBY). {@link #start}가 찍는다.
+     *
+     * 예전엔 첫 tick에서 자동으로 찍었는데, 방은 첫 사람이 대기방에 들어오면 만들어지므로
+     * 아무도 시작을 누르지 않았는데 시계가 흐르기 시작했다(실측: 12초 뒤 들어온 사람이
+     * 남은 시간 107.9초를 받음).
+     */
     private long startedAtMs;
-    private GamePhase current = GamePhase.TIMELINE[0];
+    private GamePhase current = GamePhase.LOBBY;
 
     PhaseTimeline(PhaseProperties props) {
         this.props = props;
     }
 
+    /** 아직 대기 중이면 true. */
+    boolean notStarted() {
+        return startedAtMs == 0;
+    }
+
     /**
-     * 시계를 진행한다. 단계가 바뀌었으면 true.
-     * 첫 호출에서 시작 시각을 찍는다 — 방은 첫 사람이 들어와야 tick되므로 입장 시점과 같다.
+     * 게임 시작(멱등). 이 시점부터 시계가 흐른다.
+     *
+     * @return 이번 호출로 실제 시작됐으면 true. 이미 시작했으면 false.
      */
+    boolean start(long nowMs) {
+        if (startedAtMs != 0) {
+            return false;
+        }
+        startedAtMs = nowMs;
+        current = GamePhase.TIMELINE[0];
+        return true;
+    }
+
+    /** 시계를 진행한다. 단계가 바뀌었으면 true. 시작 전이면 아무 일도 하지 않는다. */
     boolean advance(long nowMs) {
         if (startedAtMs == 0) {
-            startedAtMs = nowMs;
+            return false; // LOBBY에서 대기 — 시작 신호를 받을 때까지 시계를 세워 둔다
         }
         GamePhase next = phaseAt(nowMs);
         if (next != current) {

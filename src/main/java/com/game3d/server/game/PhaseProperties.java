@@ -18,14 +18,14 @@ public record PhaseProperties(
         Duration vote
 ) {
 
-    /** 단계 길이(ms). ENDED는 길이가 없다(영원히 지속). */
+    /** 단계 길이(ms). LOBBY·ENDED는 시간으로 넘어가지 않는다(각각 시작 신호·끝). */
     public long durationMs(GamePhase phase) {
         return switch (phase) {
             case ONBOARDING -> onboarding.toMillis();
             case MISSION -> mission.toMillis();
             case SHARING -> sharing.toMillis();
             case VOTE -> vote.toMillis();
-            case ENDED -> Long.MAX_VALUE;
+            case LOBBY, ENDED -> Long.MAX_VALUE;
         };
     }
 
