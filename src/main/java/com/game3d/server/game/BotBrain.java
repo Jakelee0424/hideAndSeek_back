@@ -42,6 +42,13 @@ final class BotBrain {
      */
     private static final long SOLVE_DWELL_MS = 5000;
 
+    /**
+     * 쪽지 앞에서 읽는 시늉으로 멈춰 있는 시간(ms).
+     *
+     * 없으면 도착하자마자 다음 쪽지로 튀어서, 봇이 감방 사이를 쉼 없이 왕복하는 것처럼 보인다.
+     */
+    private static final long READ_DWELL_MS = 2500;
+
     /** 정지. 호출부는 읽기만 한다(핫패스 할당 회피용 공유 상수). */
     private static final double[] STOP = {0, 0};
 
@@ -65,6 +72,11 @@ final class BotBrain {
     // "푸는 중"인 자물쇠와 그 완료 시각. 루프 스레드 전용.
     private String solvingId;
     private long solvingUntilMs;
+
+    // 쪽지를 읽느라 멈춰 있는 시각까지와, 이번 목표에서 이미 읽기를 마쳤는지. 루프 스레드 전용.
+    // readDoneId가 없으면 읽기가 끝나자마자 같은 쪽지에서 또 읽기가 걸려 영영 못 떠난다.
+    private long readingUntilMs;
+    private String readDoneId;
 
     // 길찾기 결과 캐시(루프 스레드 전용). BotNav는 시야 판정에 충돌 검사를 여러 번 돌리므로
     // 매 tick(20Hz) 돌리면 1 vCPU 서버엔 부담이다. 아래 조건에서만 다시 푼다.
@@ -133,6 +145,11 @@ final class BotBrain {
             return STOP;
         }
 
+        // 쪽지를 읽는 중이면 그 앞에 멈춰 선다.
+        if (nowMs < readingUntilMs) {
+            return STOP;
+        }
+
         Goal g = goal;
         boolean hasTarget = resolveTarget(g, players, solved);
 
@@ -152,6 +169,15 @@ final class BotBrain {
                 log.info("봇이 {} 앞에서 여는 중", arrived.id());
                 return STOP;
             }
+
+            // 쪽지면 잠깐 읽고 간다. readDoneId로 "이번 목표에선 이미 읽었다"를 표시하지 않으면
+            // 읽기가 끝난 다음 tick에 같은 자리에서 또 읽기가 걸려 그 쪽지를 영영 못 떠난다.
+            if (arrived != null && !arrived.solvable() && !arrived.id().equals(readDoneId)) {
+                readingUntilMs = nowMs + READ_DWELL_MS;
+                readDoneId = arrived.id();
+                return STOP;
+            }
+
             hasTarget = false; // 도착 → 다음 목표를 고른다
         }
         if (!hasTarget) {
@@ -236,6 +262,10 @@ final class BotBrain {
      * 사람이 퍼즐을 풀면 solved가 바뀌고, 그때 아래 nearestUnsolved가 다시 후보를 낸다.
      */
     private void reconsider(Player self, Collection<Player> players, Set<String> solved) {
+        // 새 목표를 고르는 참이니 읽기 표시를 푼다. 안 그러면 나중에 같은 쪽지를 다시 골랐을 때
+        // (순회 기록 초기화 뒤) 멈추지 않고 지나친다.
+        readDoneId = null;
+
         Set<String> skip = visited;
         if (!blocked.isEmpty()) {
             skip = new LinkedHashSet<>(visited);
