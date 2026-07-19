@@ -13,6 +13,8 @@ import java.util.List;
  *   phase:     진행 단계(GamePhase 이름). 로스터와 같은 규약 — 바뀔 때와 입장 시에만 포함.
  *   phaseRemainMs: 그 단계의 남은 시간. 카운트다운은 클라가 이 값에서 자체 진행한다.
  *                  매 tick 실으면 20Hz 내내 따라붙고, 절대 시각을 주면 클라 시계 오차를 탄다.
+ *   votes:     AI 지목 현황. 로스터와 같은 규약 — 바뀔 때만 포함.
+ *   aiId:      진짜 AI의 id. <b>ENDED 단계에서만</b> 실린다. 그 전에 주면 투표가 무의미해진다.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record WorldSnapshot(
@@ -22,5 +24,7 @@ public record WorldSnapshot(
         List<String> solvedIds,
         List<String> openDoors,
         String phase,
-        Long phaseRemainMs
+        Long phaseRemainMs,
+        List<VoteEntry> votes,
+        String aiId
 ) {}

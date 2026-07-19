@@ -5,6 +5,7 @@ import com.game3d.server.dto.InputMessage;
 import com.game3d.server.dto.JoinMessage;
 import com.game3d.server.dto.SolveMessage;
 import com.game3d.server.dto.Vec3;
+import com.game3d.server.dto.VoteMessage;
 import com.game3d.server.game.Room;
 import com.game3d.server.game.RoomManager;
 import com.game3d.server.game.WaitingQueue;
@@ -87,6 +88,27 @@ public class GameController {
         if (room != null && msg != null) {
             room.markSolved(msg.objectId());
         }
+    }
+
+    /**
+     * 클라 → 서버: AI 지목 투표. /app/rooms/{roomId}/vote
+     *
+     * 투표자는 input과 같은 이유로 세션에 묶인 playerId를 쓴다 — 페이로드로 받으면
+     * 남의 이름으로 아무 표나 던질 수 있다.
+     */
+    @MessageMapping("/rooms/{roomId}/vote")
+    public void vote(@DestinationVariable("roomId") String roomId,
+                     @Payload VoteMessage msg,
+                     SimpMessageHeaderAccessor accessor) {
+        Room room = roomManager.get(roomId);
+        if (room == null || msg == null) {
+            return;
+        }
+        Map<String, Object> attrs = accessor.getSessionAttributes();
+        if (attrs == null || !(attrs.get(ATTR_PLAYER) instanceof String voterId)) {
+            return;
+        }
+        room.castVote(voterId, msg.targetId());
     }
 
     /** 클라 → 서버: 감방문 열림 토글. /app/rooms/{roomId}/door */

@@ -2,6 +2,7 @@ package com.game3d.server.game;
 
 import com.game3d.server.dto.PlayerTick;
 import com.game3d.server.dto.RosterEntry;
+import com.game3d.server.dto.VoteEntry;
 import com.game3d.server.dto.WorldSnapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -23,9 +25,19 @@ public class Room {
 
     private static final Logger log = LoggerFactory.getLogger(Room.class);
 
-    /** AI 봇의 고정 id/닉. 스냅샷엔 일반 원격 플레이어처럼 실린다(프론트 무변경). */
+    /** AI 봇의 고정 id. 스냅샷엔 일반 원격 플레이어처럼 실린다. */
     private static final String BOT_ID = "bot-1";
-    private static final String BOT_NICK = "AI";
+
+    /**
+     * 봇이 쓸 사람 같은 닉네임 후보.
+     *
+     * 예전엔 닉이 그냥 "AI"였다. 마지막 단계가 <b>AI 지목 투표</b>라 그러면 정답이 화면에 적혀
+     * 있는 셈이라, 사람 이름 중 하나를 골라 쓴다. 로스터의 bot 플래그도 결말 전까지 숨긴다
+     * ({@link #snapshot}) — 둘 중 하나만 가려서는 정체가 그대로 드러난다.
+     */
+    private static final String[] BOT_NICKS = {
+        "민준", "서연", "도윤", "하은", "지호", "수아", "예준", "지우"
+    };
 
     /** 봇이 감방문을 여는 사거리(m). 프론트 prisonLayout.DOOR_RANGE 와 같은 값. */
     private static final double BOT_DOOR_RANGE = 3.0;
@@ -82,6 +94,14 @@ public class Room {
     // 컨트롤러 스레드(사람 solve)에서 쓰고 루프 스레드(tick)에서 읽는다.
     private volatile long firstCellOpenedAtMs;
 
+    // AI 지목 투표(투표자 → 지목 대상). 다시 찍으면 덮어쓴다.
+    private final Map<String, String> votes = new ConcurrentHashMap<>();
+    private final AtomicBoolean votesDirty = new AtomicBoolean();
+
+    // 입장 순서. players는 ConcurrentHashMap이라 순회 순서가 입장 순이 아니다.
+    // 방장을 "먼저 들어온 사람"으로 뽑으려면 순서를 따로 들고 있어야 한다.
+    private final List<String> joinOrder = new CopyOnWriteArrayList<>();
+
     /** 진행 단계 시계. 루프 스레드(tick)에서만 만진다. */
     private final PhaseTimeline phases;
 
@@ -118,6 +138,7 @@ public class Room {
     public void join(String id, String nick) {
         players.computeIfAbsent(id, key -> {
             double[] s = randomCellSpawn();
+            joinOrder.add(key); // 방장 선출용 순서. computeIfAbsent 안이라 최초 1회만 탄다.
             return new Player(key, nick, s[0], s[1]);
         });
         spawnBot();
@@ -135,8 +156,37 @@ public class Room {
     public void spawnBot() {
         players.computeIfAbsent(BOT_ID, key -> {
             double[] s = randomCellSpawn();
-            return new Player(key, BOT_NICK, s[0], s[1], new BotBrain(llm, planIntervalMs));
+            joinOrder.add(key); // 봇도 순서에 넣되, 방장 선출에서는 제외된다(아래 snapshot 주석)
+            return new Player(key, botNick(), s[0], s[1], new BotBrain(llm, planIntervalMs));
         });
+    }
+
+    /** 사람과 겹치지 않는 봇 닉을 고른다. 다 겹치면 그냥 무작위(그럴 일은 사실상 없다). */
+    private String botNick() {
+        Set<String> taken = new HashSet<>();
+        for (Player p : players.values()) {
+            taken.add(p.nick);
+        }
+        ThreadLocalRandom rnd = ThreadLocalRandom.current();
+        int start = rnd.nextInt(BOT_NICKS.length);
+        for (int i = 0; i < BOT_NICKS.length; i++) {
+            String candidate = BOT_NICKS[(start + i) % BOT_NICKS.length];
+            if (!taken.contains(candidate)) {
+                return candidate;
+            }
+        }
+        return BOT_NICKS[start];
+    }
+
+    /** AI 지목 투표. 다시 찍으면 덮어쓴다. 자기 자신은 못 찍는다. */
+    public void castVote(String voterId, String targetId) {
+        if (voterId == null || targetId == null || voterId.equals(targetId)
+                || !players.containsKey(targetId)) {
+            return;
+        }
+        if (!targetId.equals(votes.put(voterId, targetId))) {
+            votesDirty.set(true);
+        }
     }
 
     /** 랜덤 감방 + 감방 내부 랜덤 위치. {x, z} */
@@ -152,6 +202,10 @@ public class Room {
     /** 이탈. */
     public void leave(String id) {
         if (players.remove(id) != null) {
+            joinOrder.remove(id);
+            votes.remove(id);   // 나간 사람의 표는 무효
+            votes.values().removeIf(id::equals); // 나간 사람을 지목한 표도 무효
+            votesDirty.set(true);
             rosterDirty.set(true);
         }
     }
@@ -170,6 +224,10 @@ public class Room {
         // 단계 전이는 경과 시간으로만 결정된다(PhaseTimeline). 바뀐 tick에만 스냅샷에 싣는다.
         if (phases.advance(nowMs)) {
             phaseDirty.set(true);
+            // 결말에 들어서면 최종 집계를 한 번 실어 보낸다(그 전 표가 그대로면 dirty가 안 서 있다).
+            if (phases.phase() == GamePhase.ENDED) {
+                votesDirty.set(true);
+            }
             log.info("방 {} 단계 전환 → {}", roomId, phases.phase());
         }
 
@@ -350,22 +408,46 @@ public class Room {
         for (Player p : players.values()) {
             states.add(p.tickState());
         }
-        // 로스터는 변경됐을 때만 싣는다(그 외 null → JSON 생략).
+        boolean ended = phases.phase() == GamePhase.ENDED;
+
+        // 로스터는 변경됐을 때만 싣는다(그 외 null → JSON 생략). 입장 순서대로 담는다 —
+        // 클라가 첫 번째를 방장으로 뽑는데, players는 ConcurrentHashMap이라 순회 순서가 제멋대로다.
+        //
+        // ⚠️ bot 플래그는 항상 false로 내보낸다. 마지막이 AI 지목 투표라 정체를 알려주면 게임이
+        //    성립하지 않는다. 진짜 정체는 결말(ENDED)에 aiId로만 나간다.
         List<RosterEntry> roster = null;
         if (rosterDirty.getAndSet(false)) {
             roster = new ArrayList<>(players.size());
-            for (Player p : players.values()) {
-                roster.add(p.rosterEntry());
+            for (String id : joinOrder) {
+                Player p = players.get(id);
+                if (p != null) {
+                    roster.add(new RosterEntry(p.id, p.nick, false));
+                }
             }
         }
         // 단계도 같은 규약. 클라는 remain을 받은 시점부터 스스로 카운트다운한다.
+        //
+        // aiId도 여기 얹는다. 결말이라고 매 tick 실으면 20Hz 내내 따라붙는데, 한 번만 알면
+        // 되는 값이다. 단계는 전환 시와 입장 시에 나가므로 중간 입장자도 함께 받는다.
         String phase = null;
         Long phaseRemainMs = null;
+        String aiId = null;
         if (phaseDirty.getAndSet(false)) {
             phase = phases.phase().name();
             phaseRemainMs = phases.remainMs(nowMs);
+            if (ended) {
+                aiId = BOT_ID;
+            }
+        }
+        // 표도 바뀔 때만. 결말 진입 시엔 tick이 votesDirty를 세워 최종 집계가 함께 나간다.
+        List<VoteEntry> voteList = null;
+        if (votesDirty.getAndSet(false)) {
+            voteList = new ArrayList<>(votes.size());
+            for (Map.Entry<String, String> e : votes.entrySet()) {
+                voteList.add(new VoteEntry(e.getKey(), e.getValue()));
+            }
         }
         return new WorldSnapshot(tick, states, roster, new ArrayList<>(solvedIds),
-                new ArrayList<>(openDoors), phase, phaseRemainMs);
+                new ArrayList<>(openDoors), phase, phaseRemainMs, voteList, aiId);
     }
 }
