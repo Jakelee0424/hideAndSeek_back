@@ -106,6 +106,10 @@ public class Room {
     // PhaseTimeline은 루프 스레드 전용이라 컨트롤러가 직접 시작시키면 규약이 깨진다.
     private volatile boolean startRequested;
 
+    // 이미 배정된 감방 번호와 그 주인. 한 방에 둘이 몰리지 않게 하려는 것이다.
+    private final Set<Integer> takenCells = ConcurrentHashMap.newKeySet();
+    private final Map<String, Integer> cellOfPlayer = new ConcurrentHashMap<>();
+
     // 입장 순서. players는 ConcurrentHashMap이라 순회 순서가 입장 순이 아니다.
     // 방장을 "먼저 들어온 사람"으로 뽑으려면 순서를 따로 들고 있어야 한다.
     private final List<String> joinOrder = new CopyOnWriteArrayList<>();
@@ -176,7 +180,7 @@ public class Room {
             return false;
         }
         players.computeIfAbsent(id, key -> {
-            double[] s = randomCellSpawn();
+            double[] s = takeFreeCell(key);
             joinOrder.add(key); // 방장 선출용 순서. computeIfAbsent 안이라 최초 1회만 탄다.
             return new Player(key, nick, s[0], s[1]);
         });
@@ -201,8 +205,14 @@ public class Room {
      */
     public void spawnBot() {
         players.computeIfAbsent(BOT_ID, key -> {
-            double[] s = randomCellSpawn();
+            double[] s = takeFreeCell(key);
             joinOrder.add(key); // 봇도 순서에 넣되, 방장 선출에서는 제외된다(아래 snapshot 주석)
+            // 봇은 준비 완료 상태로 들어온다. 서버의 allReady는 어차피 봇을 세지 않지만,
+            // 클라는 결말 전까지 누가 봇인지 알 수 없어(roster.bot을 false로 숨긴다)
+            // 봇을 사람으로 보고 "쟤가 아직 준비를 안 했다"며 시작 버튼을 막는다.
+            // 준비된 것으로 실어 보내면 위장도 유지되고 클라 계산도 맞는다.
+            ready.add(key);
+            readyDirty.set(true);
             return new Player(key, botNick(), s[0], s[1], new BotBrain(llm, planIntervalMs));
         });
     }
@@ -274,10 +284,34 @@ public class Room {
         }
     }
 
-    /** 랜덤 감방 + 감방 내부 랜덤 위치. {x, z} */
-    private static double[] randomCellSpawn() {
+    /**
+     * 아직 아무도 없는 감방을 하나 골라 그 안 임의 위치에 세운다. {x, z}
+     *
+     * 예전엔 그냥 무작위로 골랐는데, 감방 4개에 사람 3 + 봇 1을 무작위로 넣으면 한 방에
+     * 둘이 몰리는 일이 흔하다(빈 방이 생기고, 그 방 쪽지는 아무도 못 본다).
+     * 정원이 3명이라 봇을 합쳐도 4 이하 — 빈 방이 항상 있으므로 겹칠 일이 없다.
+     *
+     * join이 synchronized라 배정과 기록 사이에 끼어들 여지가 없다.
+     */
+    private double[] takeFreeCell(String playerId) {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
-        double[] c = CELL_CENTERS[rnd.nextInt(CELL_CENTERS.length)];
+        int idx = -1;
+        // 빈 방 중에서 무작위로 — 늘 1호실부터 차는 것보다 자연스럽다.
+        int start = rnd.nextInt(CELL_CENTERS.length);
+        for (int i = 0; i < CELL_CENTERS.length; i++) {
+            int cand = (start + i) % CELL_CENTERS.length;
+            if (!takenCells.contains(cand)) {
+                idx = cand;
+                break;
+            }
+        }
+        if (idx < 0) {
+            idx = start; // 정원을 넘겨 방이 다 찼다면 그때는 겹쳐도 어쩔 수 없다
+        }
+        takenCells.add(idx);
+        cellOfPlayer.put(playerId, idx);
+
+        double[] c = CELL_CENTERS[idx];
         return new double[] {
             c[0] + rnd.nextDouble(-2.5, 2.5),
             c[1] + rnd.nextDouble(-2.5, 2.5),
@@ -291,6 +325,12 @@ public class Room {
             votes.remove(id);   // 나간 사람의 표는 무효
             votes.values().removeIf(id::equals); // 나간 사람을 지목한 표도 무효
             ready.remove(id);   // 안 그러면 나간 사람이 "준비됨"으로 남아 정원 판정이 어긋난다
+            // 쓰던 감방을 돌려놓는다. 반납하지 않으면 들락날락하는 사이 빈 방이 없다고
+            // 판단해 뒤에 온 사람들이 한 방에 겹친다.
+            Integer cell = cellOfPlayer.remove(id);
+            if (cell != null) {
+                takenCells.remove(cell);
+            }
             votesDirty.set(true);
             readyDirty.set(true);
             rosterDirty.set(true);
