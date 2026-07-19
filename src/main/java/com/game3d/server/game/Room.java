@@ -121,6 +121,17 @@ public class Room {
         return roomId;
     }
 
+    /** 방에 있는 사람 수(AI 봇 제외). 정원 판정에 쓴다. */
+    private int humanCount() {
+        int n = 0;
+        for (Player p : players.values()) {
+            if (!p.bot) {
+                n++;
+            }
+        }
+        return n;
+    }
+
     /**
      * 사람이 아무도 없으면 빈 방. 봇은 인원으로 세지 않는다.
      * (봇을 세면 봇만 남은 방이 영영 안 치워지고 루프에 계속 남는다)
@@ -134,17 +145,33 @@ public class Room {
         return true;
     }
 
-    /** 입장(멱등). 이미 있으면 닉네임만 갱신. 랜덤 감방 + 감방 내부 랜덤 위치에 스폰. */
-    public void join(String id, String nick) {
+    /**
+     * 입장(멱등). 이미 있으면 그대로 통과. 랜덤 감방 + 감방 내부 랜덤 위치에 스폰.
+     *
+     * @return 들어왔으면 true, 방이 가득 차 거절했으면 false. 거절 시 호출부는 대기열 자리를
+     *         반납하고 세션을 묶지 않아야 한다 — 안 그러면 유령 자리가 남는다.
+     */
+    public synchronized boolean join(String id, String nick) {
+        // synchronized인 이유: 세는 것과 넣는 것이 떨어져 있으면 정원 검사가 무의미해진다.
+        // STOMP 인바운드는 스레드 풀이라 여러 명이 실제로 동시에 들어온다 — 그러면 전원이
+        // "아직 0명"인 시점에 검사를 통과한다(정원 3에 5명이 들어간 실측이 있다).
+        // 입장은 사람당 한 번뿐이라 직렬화 비용은 문제가 되지 않는다.
+
+        // 이미 있는 사람의 재접속은 정원과 무관하게 받는다(새로고침으로 쫓겨나면 안 된다).
+        if (!players.containsKey(id) && humanCount() >= props.maxPlayersPerRoom()) {
+            log.info("방 {} 정원 초과({}명) → {} 입장 거절", roomId, props.maxPlayersPerRoom(), id);
+            return false;
+        }
         players.computeIfAbsent(id, key -> {
             double[] s = randomCellSpawn();
             joinOrder.add(key); // 방장 선출용 순서. computeIfAbsent 안이라 최초 1회만 탄다.
             return new Player(key, nick, s[0], s[1]);
         });
         spawnBot();
-        // 봇까지 넣은 뒤에 세워야 로스터에 봇 닉("AI")이 함께 실린다.
+        // 봇까지 넣은 뒤에 세워야 로스터에 봇 닉이 함께 실린다.
         rosterDirty.set(true); // 다음 스냅샷에 로스터 1회 재전송
         phaseDirty.set(true);  // 중간 입장자에게 현재 단계·남은 시간 1회 전송
+        return true;
     }
 
     /**

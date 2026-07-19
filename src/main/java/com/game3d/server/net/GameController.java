@@ -52,7 +52,11 @@ public class GameController {
         }
 
         Room room = roomManager.getOrCreate(roomId);
-        room.join(msg.id(), msg.nick());
+        if (!room.join(msg.id(), msg.nick())) {
+            // 방 정원 초과. 잡아둔 대기열 자리를 돌려주지 않으면 아무도 못 쓰는 유령 자리가 된다.
+            queue.release(msg.id());
+            return; // 세션에도 묶지 않는다 — 이후 input/solve가 통과되면 안 된다.
+        }
 
         Map<String, Object> attrs = accessor.getSessionAttributes();
         if (attrs != null) {
