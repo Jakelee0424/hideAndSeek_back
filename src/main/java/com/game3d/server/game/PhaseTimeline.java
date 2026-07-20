@@ -22,6 +22,15 @@ class PhaseTimeline {
     private long startedAtMs;
     private GamePhase current = GamePhase.LOBBY;
 
+    /**
+     * 순찰에 걸려 앞당겨진 시간(ms). 경과 시간에 더해 시계를 빨리 감는다.
+     *
+     * 단계 길이를 줄이지 않고 경과 쪽을 미는 이유: 길이를 건드리면 어느 단계에서 깎을지를
+     * 정해야 하는데(지금 단계? 남은 전부?), 경과를 밀면 "자정이 그만큼 당겨진다"가 단계
+     * 구분 없이 한 번에 성립한다. 남은 순찰 일정도 같은 시계를 보므로 함께 당겨진다.
+     */
+    private long penaltyMs;
+
     PhaseTimeline(PhaseProperties props) {
         this.props = props;
     }
@@ -62,12 +71,29 @@ class PhaseTimeline {
         return current;
     }
 
+    /**
+     * 자정을 앞당긴다(순찰 적발 페널티).
+     *
+     * 남은 시간보다 크게 들어와도 막지 않는다 — 그러면 곧바로 ENDED가 되는데, 그건 "시간이
+     * 다 됐다"는 뜻이라 규칙상 옳다.
+     */
+    void penalize(long ms) {
+        if (ms > 0) {
+            penaltyMs += ms;
+        }
+    }
+
+    /** 게임 시작 기준 경과 시간(ms). 페널티가 반영된 값 — 시계는 이것 하나만 본다. */
+    long elapsedMs(long nowMs) {
+        return startedAtMs == 0 ? 0 : nowMs - startedAtMs + penaltyMs;
+    }
+
     /** 현재 단계의 남은 시간(ms). ENDED거나 시작 전이면 0. */
     long remainMs(long nowMs) {
         if (startedAtMs == 0 || current == GamePhase.ENDED) {
             return 0;
         }
-        long elapsed = nowMs - startedAtMs;
+        long elapsed = elapsedMs(nowMs);
         long end = 0;
         for (GamePhase p : GamePhase.TIMELINE) {
             end += props.durationMs(p);
@@ -80,7 +106,7 @@ class PhaseTimeline {
 
     /** 경과 시간이 어느 단계에 해당하는지. 타임라인을 다 지나면 ENDED. */
     private GamePhase phaseAt(long nowMs) {
-        long elapsed = nowMs - startedAtMs;
+        long elapsed = elapsedMs(nowMs);
         long end = 0;
         for (GamePhase p : GamePhase.TIMELINE) {
             end += props.durationMs(p);

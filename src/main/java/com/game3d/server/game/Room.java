@@ -112,6 +112,13 @@ public class Room {
     // 진행 단계 변경 여부. 로스터와 같은 규약 — 바뀔 때만 싣는다.
     // 입장 때도 세운다: 중간에 들어온 사람도 현재 단계를 받아야 한다.
     private final AtomicBoolean phaseDirty = new AtomicBoolean(true);
+
+    // 정기 순찰. 시계와 같은 규약으로 루프 스레드가 굴리고, 바뀔 때만 스냅샷에 싣는다.
+    // 입장 때도 세운다: 순찰 도중에 들어온 사람도 지금 순찰 중임을 알아야 한다.
+    private final Patrol patrol;
+    private final PatrolProperties patrolProps;
+    private final AtomicBoolean patrolDirty = new AtomicBoolean(true);
+
     private long tick;
 
     // 이 tick에 성사된 펀치들. tick()이 채우고 곧이어 snapshot()이 실어 보낸 뒤 비운다.
@@ -152,11 +159,14 @@ public class Room {
     /** 테스트 방이면 준비·시작을 기다리지 않고 첫 입장에서 바로 시작한다. */
     private final boolean autoStart;
 
-    Room(String roomId, GameProperties props, PhaseProperties phaseProps, BotPlanner llm,
-         long planIntervalMs, boolean autoStart) {
+    Room(String roomId, GameProperties props, PhaseProperties phaseProps,
+         PatrolProperties patrolProps, BotPlanner llm, long planIntervalMs, boolean autoStart) {
         this.roomId = roomId;
         this.props = props;
         this.phases = new PhaseTimeline(phaseProps);
+        // 순찰 시각은 방을 만들 때 다 뽑아 둔다(Patrol 주석 참고). 방마다 다른 시각이 나온다.
+        this.patrol = new Patrol(patrolProps, phaseProps);
+        this.patrolProps = patrolProps;
         this.llm = llm;
         this.planIntervalMs = planIntervalMs;
         this.autoStart = autoStart;
@@ -217,6 +227,7 @@ public class Room {
         rosterDirty.set(true); // 다음 스냅샷에 로스터 1회 재전송
         phaseDirty.set(true);  // 중간 입장자에게 현재 단계·남은 시간 1회 전송
         readyDirty.set(true);  // 새로 들어온 사람도 남들의 준비 상태를 봐야 한다
+        patrolDirty.set(true); // 순찰 도중에 들어왔다면 지금 순찰 중임을 알아야 한다
         // 테스트 방은 준비·시작을 기다리지 않는다. 단계가 LOBBY를 벗어나면 프론트가 알아서
         // 게임 화면으로 넘겨주므로(대기방의 phase 감시), 클라는 손볼 게 없다.
         if (autoStart) {
@@ -381,6 +392,10 @@ public class Room {
     public void punch(String id) {
         Player p = players.get(id);
         if (p != null) {
+            // 순찰 중 주먹질도 "수상한 움직임"이다. 막지는 않는다 — 치는 건 자유고 대가만 치른다.
+            if (patrol.active()) {
+                catchSuspicious(p, "폭행");
+            }
             p.requestPunch();
         }
     }
@@ -478,6 +493,13 @@ public class Room {
         // 펀치는 이동보다 먼저 해소한다 — 이번 tick의 넉백 속도가 아래 이동 적분에 바로 실리도록.
         resolvePunches(nowMs);
 
+        // 순찰 시계. 페널티가 반영된 경과 시간을 그대로 쓴다 — 자정이 당겨지면 순찰도 당겨진다.
+        if (patrol.advance(phases.elapsedMs(nowMs))) {
+            patrolDirty.set(true);
+            log.info("방 {} 순찰 {}", roomId, patrol.state());
+        }
+        boolean patrolling = patrol.active();
+
         double dt = props.tickSeconds();
         double speed = props.speed();
         long timeout = props.inputTimeoutMs();
@@ -493,10 +515,22 @@ public class Room {
                 double[] mv = p.brain.steer(p, players.values(), solvedIds, unreachableFor(p), nowMs);
                 mx = mv[0];
                 mz = mv[1];
+                // 순찰 중에는 봇도 멈춘다. 다만 가끔은 실수한다(botSlipChance) — 스크립트라
+                // 늘 완벽히 멈추면 "한 번도 안 걸린 놈 = AI"가 되어 마지막 투표가 무의미해진다.
+                if (patrolling && !patrol.botSlipsNow()) {
+                    mx = 0;
+                    mz = 0;
+                }
             } else {
                 mx = p.inputMoveX(nowMs, timeout);
                 mz = p.inputMoveZ(nowMs, timeout);
                 sprint = p.inputSprint(nowMs, timeout);
+            }
+
+            // 수상한 움직임 판정. 조작을 막지는 않는다 — 움직였다는 사실만 본다.
+            // 시점 회전(rotationY)은 세지 않는다. 고개를 돌리는 것까지 걸면 너무 가혹하다.
+            if (patrolling && (isMoving(mx, mz) || (!p.bot && p.inputJump(nowMs, timeout)))) {
+                catchSuspicious(p, "이동");
             }
 
             // 클라 입력 불신: 이동 벡터 크기를 1로 클램프(속도 핵 방지).
@@ -584,6 +618,44 @@ public class Room {
      * 퍼즐 해결 기록(협동). 방 생명주기 동안 유지된다.
      * 감방 자물쇠였다면 그 방 문도 함께 연다 — 사람·봇이 같은 경로를 타게 하려는 것이다.
      */
+    /** 이동 의도가 "움직였다"고 볼 만한 크기인가. 부동소수 찌꺼기는 걸러낸다. */
+    private boolean isMoving(double mx, double mz) {
+        double eps = patrolProps.moveEpsilon();
+        return Math.abs(mx) > eps || Math.abs(mz) > eps;
+    }
+
+    /**
+     * 순찰에 걸렸다 — 자정을 앞당긴다.
+     *
+     * 페널티는 순찰 1회당 한 번뿐이다(Patrol.reportSuspicious). 셋이 동시에 움직였다고
+     * 3분을 깎으면 한 번의 순간에 판이 끝나 버린다.
+     */
+    private void catchSuspicious(Player p, String what) {
+        if (!patrol.reportSuspicious(p.id)) {
+            return;
+        }
+        long penalty = patrolProps.penalty().toMillis();
+        phases.penalize(penalty);
+        // 남은 시간이 방금 바뀌었으니 단계 정보를 다시 실어 보내야 한다(안 그러면 클라
+        // 카운트다운이 예전 값으로 계속 흐른다).
+        phaseDirty.set(true);
+        patrolDirty.set(true);
+        log.info("방 {} 순찰 적발: {}({}) — 자정 {}초 단축", roomId, p.nick, what, penalty / 1000);
+    }
+
+    /**
+     * 사람이 퍼즐을 풀었다. 순찰 중이었다면 그 행동 자체가 적발 사유다.
+     *
+     * 푸는 것 자체를 막지는 않는다 — 멈출지 말지는 플레이어가 정한다는 게 이 장치의 규칙이다.
+     */
+    public void solveByPlayer(String playerId, String objectId) {
+        Player p = playerId == null ? null : players.get(playerId);
+        if (p != null && patrol.active()) {
+            catchSuspicious(p, "상호작용");
+        }
+        markSolved(objectId);
+    }
+
     public void markSolved(String objectId) {
         if (objectId == null || objectId.isBlank()) {
             return;
@@ -723,7 +795,18 @@ public class Room {
         List<PunchEvent> punches = pendingPunches;
         pendingPunches = null;
 
+        // 순찰도 로스터와 같은 규약 — 상태가 바뀔 때, 누가 걸릴 때, 입장할 때만 싣는다.
+        String patrolState = null;
+        Long patrolRemainMs = null;
+        String patrolCaughtId = null;
+        if (patrolDirty.getAndSet(false)) {
+            patrolState = patrol.state().name();
+            patrolRemainMs = patrol.remainMs(phases.elapsedMs(nowMs));
+            patrolCaughtId = patrol.caughtId();
+        }
+
         return new WorldSnapshot(tick, states, roster, new ArrayList<>(solvedIds),
-                new ArrayList<>(openDoors), phase, phaseRemainMs, voteList, aiId, readyIds, punches);
+                new ArrayList<>(openDoors), phase, phaseRemainMs, voteList, aiId, readyIds,
+                punches, patrolState, patrolRemainMs, patrolCaughtId);
     }
 }

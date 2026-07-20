@@ -104,13 +104,20 @@ public class GameController {
     }
 
     /** 클라 → 서버: 퍼즐 해결(협동 동기화). /app/rooms/{roomId}/solve
-     *  해결 상태는 GameLoop의 스냅샷(solvedIds)으로 방 전체에 전파된다. */
+     *  해결 상태는 GameLoop의 스냅샷(solvedIds)으로 방 전체에 전파된다.
+     *
+     *  누가 풀었는지도 함께 넘긴다 — 순찰 중이었다면 그 행동 자체가 적발 사유이기 때문이다.
+     *  id는 input과 같은 이유로 세션에서 가져온다(클라가 남의 이름을 댈 수 없게). */
     @MessageMapping("/rooms/{roomId}/solve")
-    public void solve(@DestinationVariable("roomId") String roomId, @Payload SolveMessage msg) {
+    public void solve(@DestinationVariable("roomId") String roomId, @Payload SolveMessage msg,
+                      SimpMessageHeaderAccessor accessor) {
         Room room = roomManager.get(roomId);
-        if (room != null && msg != null) {
-            room.markSolved(msg.objectId());
+        if (room == null || msg == null) {
+            return;
         }
+        Map<String, Object> attrs = accessor.getSessionAttributes();
+        String playerId = attrs != null && attrs.get(ATTR_PLAYER) instanceof String id ? id : null;
+        room.solveByPlayer(playerId, msg.objectId());
     }
 
     /** 클라 → 서버: 대기방 준비 토글. /app/rooms/{roomId}/ready */

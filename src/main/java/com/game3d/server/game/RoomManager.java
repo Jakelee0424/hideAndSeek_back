@@ -17,15 +17,18 @@ public class RoomManager {
 
     private final GameProperties props;
     private final PhaseProperties phaseProps;
+    private final PatrolProperties patrolProps;
     private final Map<String, Room> rooms = new ConcurrentHashMap<>();
 
     /** null이면 봇이 스크립트로만 돈다. */
     private final BotPlanner llm;
     private final long planIntervalMs;
 
-    public RoomManager(GameProperties props, PhaseProperties phaseProps, BotProperties botProps, GroqBotPlanner groq) {
+    public RoomManager(GameProperties props, PhaseProperties phaseProps,
+                       PatrolProperties patrolProps, BotProperties botProps, GroqBotPlanner groq) {
         this.props = props;
         this.phaseProps = phaseProps;
+        this.patrolProps = patrolProps;
         BotProperties.Llm cfg = botProps.llm();
         // 키가 비었는데 켜져 있으면 매 주기 401을 맞는다. 그럴 바엔 아예 스크립트로 돌린다.
         // 모델 목록이 비어 있어도 마찬가지다 — 보낼 모델이 없으면 매번 400이다.
@@ -54,6 +57,22 @@ public class RoomManager {
     );
 
     /**
+     * 테스트 방의 순찰 설정. 정식 값(20~30초 순찰, 90초 간격)은 90초짜리 창에 들어가지 않는다.
+     * Patrol이 앞뒤로 20초씩 비워 두므로 실제 창은 35~70초 남짓이다 — 여기에 맞춰 줄였다.
+     */
+    private static final PatrolProperties TEST_PATROL = new PatrolProperties(
+            true,
+            1, 1,                    // 짧은 판이라 한 번만
+            Duration.ofSeconds(8),
+            Duration.ofSeconds(10),
+            Duration.ofSeconds(5),   // 최소 간격(1회라 의미는 없지만 계산식이 쓴다)
+            Duration.ofSeconds(3),   // 예고
+            Duration.ofSeconds(10),  // 걸리면 자정 10초 단축
+            0.05,
+            0.25
+    );
+
+    /**
      * 이 코드로 만든 방은 <b>대기 없이 바로 시작</b>하고 단계도 짧게 돈다.
      *
      * 정식 흐름은 전원 준비 → 방장 시작이라 혼자서는 게임을 볼 수 없다. 개발·시연 점검용
@@ -70,7 +89,8 @@ public class RoomManager {
             if (test) {
                 log.info("테스트 방 {} 생성 — 즉시 시작 + 단축 단계({}초)", id, TEST_PHASES.totalMs() / 1000);
             }
-            return new Room(id, props, test ? TEST_PHASES : phaseProps, llm, planIntervalMs, test);
+            return new Room(id, props, test ? TEST_PHASES : phaseProps,
+                    test ? TEST_PATROL : patrolProps, llm, planIntervalMs, test);
         });
     }
 

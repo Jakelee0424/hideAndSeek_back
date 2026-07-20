@@ -17,6 +17,14 @@ import java.util.List;
  *   aiId:      진짜 AI의 id. <b>ENDED 단계에서만</b> 실린다. 그 전에 주면 투표가 무의미해진다.
  *   readyIds:  대기방에서 준비를 마친 사람들. 로스터와 같은 규약 — 바뀔 때만 포함.
  *   punches:   이 tick에 성사된 펀치들. 위치와 달리 일어난 순간에만 실린다(그 외 null → 생략).
+ *   patrol:    정기 순찰 상태(Patrol.State 이름: WARNING/ACTIVE). 순찰이 없으면 NONE.
+ *              로스터와 같은 규약 — 바뀔 때와 입장 시에만 포함.
+ *   patrolRemainMs: 그 상태가 끝나기까지 남은 시간. 카운트다운은 클라가 자체 진행한다.
+ *   patrolCaughtId: 이번 순찰에서 걸린 사람의 id. 아무도 안 걸렸으면 null.
+ *
+ * ⚠️ 필드를 더할 때 <b>박싱 타입</b>(Long/Boolean)을 쓸 것. 서버→클라 방향이라 구버전 클라가
+ *    깨지진 않지만, NON_NULL 생략이 먹으려면 null을 담을 수 있어야 한다.
+ *    (클라→서버 DTO에 primitive를 더하면 구버전 클라가 통째로 깨진다 — InputMessage 참고)
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record WorldSnapshot(
@@ -30,5 +38,8 @@ public record WorldSnapshot(
         List<VoteEntry> votes,
         String aiId,
         List<String> readyIds,
-        List<PunchEvent> punches
+        List<PunchEvent> punches,
+        String patrol,
+        Long patrolRemainMs,
+        String patrolCaughtId
 ) {}
