@@ -37,15 +37,9 @@ final class Interactables {
             new Poi("lock-B", 7, 3.6, true, true, "게임 자물쇠(2호실)"),
             new Poi("lock-C", -7, -3.6, true, true, "게임 자물쇠(3호실)"),
             new Poi("lock-D", 7, -3.6, true, true, "게임 자물쇠(4호실)"),
-            // 힌트 쪽지 8개(방마다 2개). 해결 대상이 아니라 읽는 곳이다.
-            new Poi("note-A1", -11, 9.5, false, false, "벽 낙서(1호실)"),
-            new Poi("note-A2", -4, 9.0, false, false, "변기 뒤 낙서(1호실)"),
-            new Poi("note-B1", 11, 9.5, false, false, "낡은 쪽지(2호실)"),
-            new Poi("note-B2", 4, 9.0, false, false, "벽 그림(2호실)"),
-            new Poi("note-C1", -11, -9.5, false, false, "긁힌 쪽지(3호실)"),
-            new Poi("note-C2", -4, -9.0, false, false, "벽 낙서(3호실)"),
-            new Poi("note-D1", 11, -9.5, false, false, "낡은 쪽지(4호실)"),
-            new Poi("note-D2", 4, -9.0, false, false, "벽 그림(4호실)"),
+            // 감방 안 쪽지 8개는 없앴다(2026-07-20). 자물쇠가 미니게임이 되면서 알려줄 답이
+            // 사라졌기 때문이다. 프론트 interactables.ts에서도 함께 지웠다 — 한쪽만 지우면
+            // 봇이 유령 좌표로 걸어가 벽에 박힌다(이 파일 위쪽 주석의 전례 참고).
             // 최종 탈옥문과 그 단서. 단서는 감방 밖이라 누구나 닿는다.
             // 탈옥문은 botSolvable=false — 봇이 열면 봇이 게임을 끝내 버린다.
             new Poi("note-mess", -35, 7, false, false, "배식 당번표(식당)"),
