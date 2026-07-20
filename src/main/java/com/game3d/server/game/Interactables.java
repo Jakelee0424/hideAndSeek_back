@@ -31,10 +31,12 @@ final class Interactables {
     // 여기는 옛 3개(lockbox-1/door-1/note-1) 그대로였다.
     private static final List<Poi> ALL = List.of(
             // 감방 자물쇠 4개. 풀면 그 방 감방문이 열린다(Room.LOCK_OPENS).
-            new Poi("lock-A", -7, 3.6, true, true, "자물쇠(1호실, 숫자)"),
-            new Poi("lock-B", 7, 3.6, true, true, "자물쇠(2호실, 색 순서)"),
-            new Poi("lock-C", -7, -3.6, true, true, "자물쇠(3호실, 문자)"),
-            new Poi("lock-D", 7, -3.6, true, true, "자물쇠(4호실, 레버)"),
+            // 사람은 여기서 아케이드 미니게임을 한 판 이겨야 한다. 어떤 게임이 걸리는지는
+            // 프론트가 방 코드로 정하므로 서버는 모른다 — 봇에게도 알릴 게 없어 라벨에서 뺐다.
+            new Poi("lock-A", -7, 3.6, true, true, "게임 자물쇠(1호실)"),
+            new Poi("lock-B", 7, 3.6, true, true, "게임 자물쇠(2호실)"),
+            new Poi("lock-C", -7, -3.6, true, true, "게임 자물쇠(3호실)"),
+            new Poi("lock-D", 7, -3.6, true, true, "게임 자물쇠(4호실)"),
             // 힌트 쪽지 8개(방마다 2개). 해결 대상이 아니라 읽는 곳이다.
             new Poi("note-A1", -11, 9.5, false, false, "벽 낙서(1호실)"),
             new Poi("note-A2", -4, 9.0, false, false, "변기 뒤 낙서(1호실)"),
