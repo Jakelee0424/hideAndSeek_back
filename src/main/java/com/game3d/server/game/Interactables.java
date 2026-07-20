@@ -40,12 +40,13 @@ final class Interactables {
             // 감방 안 쪽지 8개는 없앴다(2026-07-20). 자물쇠가 미니게임이 되면서 알려줄 답이
             // 사라졌기 때문이다. 프론트 interactables.ts에서도 함께 지웠다 — 한쪽만 지우면
             // 봇이 유령 좌표로 걸어가 벽에 박힌다(이 파일 위쪽 주석의 전례 참고).
-            // 최종 탈옥문과 그 단서. 단서는 감방 밖이라 누구나 닿는다.
-            // 탈옥문은 botSolvable=false — 봇이 열면 봇이 게임을 끝내 버린다.
+            //
+            // 배수관 철문과 그 단서. 단서는 감방 밖이라 누구나 닿는다.
+            // 철문은 botSolvable=false — 봇이 열면 봇이 게임을 끝내 버린다.
             new Poi("note-mess", -35, 7, false, false, "배식 당번표(식당)"),
             new Poi("note-west", -20, 1.5, false, false, "순찰 일지(서통로)"),
             new Poi("note-yard", 38, -8, false, false, "담벼락 자국(운동장)"),
-            new Poi("escape-gate", 42, 0, true, false, "탈옥문(운동장, 최종 탈출구)")
+            new Poi("escape-gate", 42, 0, true, false, "배수관 철문(운동장, 최종 탈출구)")
     );
 
     private Interactables() {}
@@ -64,12 +65,6 @@ final class Interactables {
         return null;
     }
 
-    /**
-     * 아직 안 풀렸고 exclude에도 없는 <b>해결 가능한</b> 지점 중 (x,z)에서 최근접. 후보가 없으면 null.
-     *
-     * exclude에 "직전 한 곳"이 아니라 "다녀온 곳 전부"를 넘겨야 한다. 해결 가능한 지점이 둘뿐인데
-     * 직전만 빼면 남는 건 항상 반대쪽 하나 → 두 곳을 영원히 왕복한다(2026-07 실측).
-     */
     /**
      * exclude에 없는 <b>쪽지</b>(solvable=false) 중 (x,z)에서 최근접. 후보가 없으면 null.
      *
@@ -94,6 +89,12 @@ final class Interactables {
         return best;
     }
 
+    /**
+     * 아직 안 풀렸고 exclude에도 없는 <b>해결 가능한</b> 지점 중 (x,z)에서 최근접. 후보가 없으면 null.
+     *
+     * exclude에 "직전 한 곳"이 아니라 "다녀온 곳 전부"를 넘겨야 한다. 해결 가능한 지점이 둘뿐인데
+     * 직전만 빼면 남는 건 항상 반대쪽 하나 → 두 곳을 영원히 왕복한다(2026-07 실측).
+     */
     static Poi nearestUnsolved(double x, double z, Set<String> solved, Set<String> exclude) {
         Poi best = null;
         double bestD2 = Double.MAX_VALUE;
