@@ -83,9 +83,20 @@ class PhaseTimeline {
         }
     }
 
-    /** 게임 시작 기준 경과 시간(ms). 페널티가 반영된 값 — 시계는 이것 하나만 본다. */
+    /** 게임 시작 기준 경과 시간(ms). 페널티가 반영된 값 — 단계 시계는 이것을 본다. */
     long elapsedMs(long nowMs) {
         return startedAtMs == 0 ? 0 : nowMs - startedAtMs + penaltyMs;
+    }
+
+    /**
+     * 페널티를 <b>빼고</b> 실제로 흐른 시간(ms).
+     *
+     * 순찰 일정은 이쪽을 본다. 페널티가 반영된 시계로 순찰을 굴리면, 걸리는 순간 시계가
+     * 앞으로 튀면서 진행 중이던 순찰 구간까지 지나가 버린다 — 걸린 사람이 오히려 순찰에서
+     * 풀려나는 셈이라 벌이 아니라 상이 된다(2026-07-21 실측: 적발 즉시 ACTIVE → NONE).
+     */
+    long rawElapsedMs(long nowMs) {
+        return startedAtMs == 0 ? 0 : nowMs - startedAtMs;
     }
 
     /** 현재 단계의 남은 시간(ms). ENDED거나 시작 전이면 0. */

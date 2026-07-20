@@ -493,8 +493,12 @@ public class Room {
         // 펀치는 이동보다 먼저 해소한다 — 이번 tick의 넉백 속도가 아래 이동 적분에 바로 실리도록.
         resolvePunches(nowMs);
 
-        // 순찰 시계. 페널티가 반영된 경과 시간을 그대로 쓴다 — 자정이 당겨지면 순찰도 당겨진다.
-        if (patrol.advance(phases.elapsedMs(nowMs))) {
+        // 순찰 시계는 페널티를 뺀 실제 경과를 본다(PhaseTimeline.rawElapsedMs 주석 참고).
+        // 도는 구간은 감방 탈출·단서 공유뿐 — 그 밖에서는 무조건 NONE이라 자정이 크게
+        // 당겨져 단계를 건너뛰어도 순찰이 남아 돌지 않는다.
+        GamePhase now = phases.phase();
+        boolean patrolWindow = now == GamePhase.MISSION || now == GamePhase.SHARING;
+        if (patrol.advance(phases.rawElapsedMs(nowMs), patrolWindow)) {
             patrolDirty.set(true);
             log.info("방 {} 순찰 {}", roomId, patrol.state());
         }
@@ -801,7 +805,8 @@ public class Room {
         String patrolCaughtId = null;
         if (patrolDirty.getAndSet(false)) {
             patrolState = patrol.state().name();
-            patrolRemainMs = patrol.remainMs(phases.elapsedMs(nowMs));
+            // 남은 시간도 순찰과 같은 시계(페널티 제외)로 재야 한다.
+            patrolRemainMs = patrol.remainMs(phases.rawElapsedMs(nowMs));
             patrolCaughtId = patrol.caughtId();
         }
 

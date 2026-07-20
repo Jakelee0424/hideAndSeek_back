@@ -87,15 +87,18 @@ class Patrol {
     /**
      * 게임 시계를 반영해 상태를 갱신한다.
      *
-     * @param elapsedMs 게임 시작 기준 경과 시간(페널티 반영된 값)
+     * @param elapsedMs 게임 시작 기준 <b>실제</b> 경과 시간. 페널티를 뺀 값이어야 한다 —
+     *                  반영된 값을 주면 걸리는 순간 시계가 튀어 진행 중이던 순찰이 끝나 버린다
+     *                  ({@link PhaseTimeline#rawElapsedMs} 주석 참고)
+     * @param allowed   지금 단계가 순찰이 도는 구간인가(감방 탈출·단서 공유). 아니면 무조건 NONE
      * @return 상태나 순찰 회차가 바뀌었으면 true(스냅샷에 다시 실어야 한다)
      */
-    boolean advance(long elapsedMs) {
+    boolean advance(long elapsedMs, boolean allowed) {
         State nextState = State.NONE;
         int nextIndex = -1;
 
         long warnMs = props.warn().toMillis();
-        for (int i = 0; i < offsets.length; i++) {
+        for (int i = 0; allowed && i < offsets.length; i++) {
             long start = offsets[i];
             long end = start + durations[i];
             if (elapsedMs >= start && elapsedMs < end) {
