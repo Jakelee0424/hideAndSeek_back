@@ -29,15 +29,17 @@ public class Room {
     private static final String BOT_ID = "bot-1";
 
     /**
-     * 봇이 쓸 사람 같은 닉네임 후보.
+     * 봇 죄수번호의 범위. 사람은 프론트 Lobby.randomPrisonerNick()이 같은 규칙으로 딴다.
      *
-     * 예전엔 닉이 그냥 "AI"였다. 마지막 단계가 <b>AI 지목 투표</b>라 그러면 정답이 화면에 적혀
-     * 있는 셈이라, 사람 이름 중 하나를 골라 쓴다. 로스터의 bot 플래그도 결말 전까지 숨긴다
-     * ({@link #snapshot}) — 둘 중 하나만 가려서는 정체가 그대로 드러난다.
+     * 예전엔 닉이 그냥 "AI"였다가, 그다음엔 사람 이름("민준"·"서연"…)이었다. 지금은 사람도
+     * 죄수번호를 쓰므로 봇도 같은 형식이어야 한다 — 마지막 단계가 <b>AI 지목 투표</b>라
+     * 혼자 다른 모양의 이름을 달면 정답이 화면에 적혀 있는 셈이다. 로스터의 bot 플래그도
+     * 결말 전까지 숨긴다({@link #snapshot}) — 둘 중 하나만 가려서는 정체가 그대로 드러난다.
+     *
+     * ⚠️ 형식을 바꾸면 프론트 Lobby와 반드시 함께 고칠 것.
      */
-    private static final String[] BOT_NICKS = {
-        "민준", "서연", "도윤", "하은", "지호", "수아", "예준", "지우"
-    };
+    private static final int BOT_NICK_MIN = 1000;
+    private static final int BOT_NICK_MAX = 9999;
 
     /** 봇이 감방문을 여는 사거리(m). 프론트 prisonLayout.DOOR_RANGE 와 같은 값. */
     private static final double BOT_DOOR_RANGE = 3.0;
@@ -217,21 +219,21 @@ public class Room {
         });
     }
 
-    /** 사람과 겹치지 않는 봇 닉을 고른다. 다 겹치면 그냥 무작위(그럴 일은 사실상 없다). */
+    /** 사람과 겹치지 않는 봇 죄수번호를 고른다. 다 겹치면 그냥 무작위(9000개 중이라 그럴 일은 없다). */
     private String botNick() {
         Set<String> taken = new HashSet<>();
         for (Player p : players.values()) {
             taken.add(p.nick);
         }
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
-        int start = rnd.nextInt(BOT_NICKS.length);
-        for (int i = 0; i < BOT_NICKS.length; i++) {
-            String candidate = BOT_NICKS[(start + i) % BOT_NICKS.length];
+        String candidate = null;
+        for (int i = 0; i < 32; i++) {
+            candidate = "죄수 " + rnd.nextInt(BOT_NICK_MIN, BOT_NICK_MAX + 1);
             if (!taken.contains(candidate)) {
                 return candidate;
             }
         }
-        return BOT_NICKS[start];
+        return candidate;
     }
 
     /** 대기방 준비 토글. */
