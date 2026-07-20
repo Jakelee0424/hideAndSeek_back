@@ -16,6 +16,7 @@ import java.util.List;
  *   votes:     AI 지목 현황. 로스터와 같은 규약 — 바뀔 때만 포함.
  *   aiId:      진짜 AI의 id. <b>ENDED 단계에서만</b> 실린다. 그 전에 주면 투표가 무의미해진다.
  *   readyIds:  대기방에서 준비를 마친 사람들. 로스터와 같은 규약 — 바뀔 때만 포함.
+ *   punches:   이 tick에 성사된 펀치들. 위치와 달리 일어난 순간에만 실린다(그 외 null → 생략).
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record WorldSnapshot(
@@ -28,5 +29,6 @@ public record WorldSnapshot(
         Long phaseRemainMs,
         List<VoteEntry> votes,
         String aiId,
-        List<String> readyIds
+        List<String> readyIds,
+        List<PunchEvent> punches
 ) {}

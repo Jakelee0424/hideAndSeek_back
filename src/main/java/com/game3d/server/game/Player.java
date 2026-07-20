@@ -32,6 +32,19 @@ public class Player {
     /** 수직 속도(m/s). 루프 스레드만 쓴다. 접지 중엔 0. */
     double vy;
 
+    /**
+     * 펀치 넉백에 의한 외부 수평 속도(m/s). 루프 스레드만 쓴다. 이동 입력과 별개로 매 tick
+     * 위치에 더해지고 지수 감쇠한다(Room.KNOCKBACK_*). 벽 충돌은 이동과 같은 Collision.resolve가 막는다.
+     */
+    double kx;
+    double kz;
+
+    /** 펀치 요청(입력 수신 스레드에서 set) → 루프 스레드가 소비. 최신 하나만 유지(연타는 쿨다운이 거른다). */
+    private volatile boolean punchRequested;
+
+    /** 마지막으로 펀치가 <b>성사</b>된 시각(ms). 루프 스레드만 쓴다. 쿨다운 판정 기준. */
+    long lastPunchAtMs;
+
     Role role = Role.HIDER;
 
     // 입력(다른 스레드에서 갱신) → 루프 스레드에서 읽음. 최신값만 유지.
@@ -71,6 +84,26 @@ public class Player {
         this.sprint = sprint;
         this.jump = jump;
         this.lastInputAtMs = nowMs;
+    }
+
+    /** 입력 수신 스레드: 펀치 요청. 사거리·전방 판정과 쿨다운은 루프 스레드가 tick에서 정한다. */
+    void requestPunch() {
+        this.punchRequested = true;
+    }
+
+    /** 루프 스레드: 펀치 요청이 있었으면 true를 돌려주고 플래그를 내린다. */
+    boolean consumePunchRequest() {
+        if (!punchRequested) {
+            return false;
+        }
+        punchRequested = false;
+        return true;
+    }
+
+    /** 루프 스레드: 넉백 임펄스 누적. 연속 타격이면 더해진다(약한 힘이라 폭주하지 않는다). */
+    void applyKnockback(double vx, double vz) {
+        this.kx += vx;
+        this.kz += vz;
     }
 
     /** 루프 스레드: 입력 타임아웃이 지났으면 정지 방향(0,0)으로 간주. */

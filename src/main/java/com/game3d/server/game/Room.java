@@ -1,6 +1,7 @@
 package com.game3d.server.game;
 
 import com.game3d.server.dto.PlayerTick;
+import com.game3d.server.dto.PunchEvent;
 import com.game3d.server.dto.RosterEntry;
 import com.game3d.server.dto.VoteEntry;
 import com.game3d.server.dto.WorldSnapshot;
@@ -44,8 +45,9 @@ public class Room {
     /** 봇이 감방문을 여는 사거리(m). 프론트 prisonLayout.DOOR_RANGE 와 같은 값. */
     private static final double BOT_DOOR_RANGE = 3.0;
 
-    /** 복도 절반 폭(m). 프론트 prisonLayout.CORRIDOR_HALF_Z 와 같은 값. */
-    private static final double CORRIDOR_HALF_Z = 2.5;
+    /** 감방 내부 반경(m). 스폰·같은-감방 판정에 쓴다. 프론트 감방 rect(14×12)의 절반. */
+    private static final double CELL_HALF_X = 7;
+    private static final double CELL_HALF_Z = 6;
 
     /**
      * 첫 사람이 감방을 연 뒤 봇이 자기 방을 열기까지 기다리는 시간(ms).
@@ -66,15 +68,35 @@ public class Room {
         "lock-A", "cell-A",
         "lock-B", "cell-B",
         "lock-C", "cell-C",
-        "lock-D", "cell-D"
+        "lock-D", "cell-D",
+        // 통로 옆방(프론트 interactables.ts). 풀면 그 방 문이 열린다.
+        "lock-work", "door-work",       // 작업장
+        "lock-med", "door-med",         // 의무실
+        "lock-laundry", "door-laundry"  // 세탁실
     );
 
-    /** 감방 4개의 중심(스폰 기준). 프론트 prisonLayout.CELLS 와 일치. */
+    // ── 펀치(약한 넉백) ────────────────────────────────────────────────────────
+    // 아래 넷 중 KNOCKBACK_SPEED/KNOCKBACK_TAU는 프론트 punchConfig.ts와 이중 관리다. victim <b>본인</b>
+    // 클라가 자기 예측 위치에 같은 힘을 재현하므로(결정론적 복제), 어긋나면 맞은 사람 화면만 서버와
+    // 벌어진다. COOLDOWN/RANGE/CONE은 판정용이라 서버 단독이다(프론트 쿨다운은 연출용 별도값).
+
+    /** 펀치 쿨다운(ms). 연타로 상대를 계속 밀어내지 못하게 한다. */
+    private static final long PUNCH_COOLDOWN_MS = 600;
+    /** 펀치가 닿는 거리(m). */
+    private static final double PUNCH_RANGE = 2.2;
+    /** 전방 판정. 바라보는 방향과 대상 방향의 코사인이 이 값 이상이어야 맞는다(≈ ±69° 콘). */
+    private static final double PUNCH_CONE_DOT = 0.35;
+    /** 넉백 초기 속도(m/s). 약하게 — 총 밀림 = SPEED*TAU ≈ 0.6m. */
+    static final double KNOCKBACK_SPEED = 5.0;
+    /** 넉백 감쇠 시간상수(s). 매 tick v *= exp(-dt/TAU). 약 3*TAU(≈0.36s)면 사실상 멈춘다. */
+    static final double KNOCKBACK_TAU = 0.12;
+
+    /** 감방 4개의 중심(스폰 기준). 프론트 prisonLayout.CELLS(본관, z 30~42) 와 일치. */
     private static final double[][] CELL_CENTERS = {
-        {-7, 6.5},  // 1호실(A)
-        {7, 6.5},   // 2호실(B)
-        {-7, -6.5}, // 3호실(C)
-        {7, -6.5},  // 4호실(D)
+        {-59, 36}, // 감방 1-1
+        {-43, 36}, // 감방 1-2
+        {-27, 36}, // 감방 1-3
+        {-11, 36}, // 감방 1-4
     };
 
     private final String roomId;
@@ -91,6 +113,10 @@ public class Room {
     // 입장 때도 세운다: 중간에 들어온 사람도 현재 단계를 받아야 한다.
     private final AtomicBoolean phaseDirty = new AtomicBoolean(true);
     private long tick;
+
+    // 이 tick에 성사된 펀치들. tick()이 채우고 곧이어 snapshot()이 실어 보낸 뒤 비운다.
+    // 둘 다 루프 스레드에서 순차 호출되므로 동기화가 필요 없다(GameLoop: tick → snapshot).
+    private List<PunchEvent> pendingPunches;
 
     // 첫 감방문이 열린 시각(ms). 0이면 아직 아무도 못 나왔다. 봇 탈출 지연의 기준점.
     // 컨트롤러 스레드(사람 solve)에서 쓰고 루프 스레드(tick)에서 읽는다.
@@ -315,8 +341,8 @@ public class Room {
 
         double[] c = CELL_CENTERS[idx];
         return new double[] {
-            c[0] + rnd.nextDouble(-2.5, 2.5),
-            c[1] + rnd.nextDouble(-2.5, 2.5),
+            c[0] + rnd.nextDouble(-5, 5),
+            c[1] + rnd.nextDouble(-4, 4),
         };
     }
 
@@ -348,6 +374,86 @@ public class Room {
         }
     }
 
+    /**
+     * 클라 → 서버: 펀치 요청. 실제 사거리·전방·쿨다운 판정과 넉백 적용은 루프 스레드(tick)가 한다
+     * — 권위 서버라 위치·속도는 루프 스레드만 만진다. 여기선 요청 플래그만 세운다.
+     */
+    public void punch(String id) {
+        Player p = players.get(id);
+        if (p != null) {
+            p.requestPunch();
+        }
+    }
+
+    /**
+     * 펀치 요청 해소(루프 스레드). 요청한 사람마다 전방 콘·사거리 안 최근접 대상에게 넉백을 준다.
+     * 결과(펀치 모션 대상 + 맞은 사람 + 방향)는 pendingPunches에 쌓여 이번 스냅샷에 실린다.
+     *
+     * 넉백 <b>속도</b>는 tick 이동 루프가 위치에 적분하므로 여기선 대상의 kx/kz만 채운다 —
+     * 그래야 이번 tick부터 바로 밀린다.
+     */
+    private void resolvePunches(long nowMs) {
+        for (Player p : players.values()) {
+            if (!p.consumePunchRequest() || nowMs - p.lastPunchAtMs < PUNCH_COOLDOWN_MS) {
+                continue;
+            }
+            p.lastPunchAtMs = nowMs;
+
+            // 바라보는 방향(프론트 규약: rotationY = atan2(mx, mz) → forward = (sin, cos)).
+            double fx = Math.sin(p.rotationY);
+            double fz = Math.cos(p.rotationY);
+
+            // 전방 콘 안 최근접 대상.
+            Player target = null;
+            double bestD2 = PUNCH_RANGE * PUNCH_RANGE;
+            for (Player o : players.values()) {
+                if (o == p) {
+                    continue;
+                }
+                double ex = o.x - p.x;
+                double ez = o.z - p.z;
+                double d2 = ex * ex + ez * ez;
+                if (d2 > bestD2) {
+                    continue;
+                }
+                double d = Math.sqrt(d2);
+                // 거의 겹쳐 있으면 방향 판정이 무의미 — 그냥 맞은 것으로 친다.
+                if (d >= 1e-4 && (ex * fx + ez * fz) / d < PUNCH_CONE_DOT) {
+                    continue;
+                }
+                target = o;
+                bestD2 = d2;
+            }
+
+            double dirX;
+            double dirZ;
+            String victimId = null;
+            if (target != null) {
+                double ex = target.x - p.x;
+                double ez = target.z - p.z;
+                double d = Math.hypot(ex, ez);
+                if (d < 1e-4) {
+                    dirX = fx;
+                    dirZ = fz;
+                } else {
+                    dirX = ex / d;
+                    dirZ = ez / d;
+                }
+                target.applyKnockback(KNOCKBACK_SPEED * dirX, KNOCKBACK_SPEED * dirZ);
+                victimId = target.id;
+            } else {
+                // 헛방: 넉백은 없지만 펀치 모션은 남들에게 보여야 한다.
+                dirX = fx;
+                dirZ = fz;
+            }
+
+            if (pendingPunches == null) {
+                pendingPunches = new ArrayList<>();
+            }
+            pendingPunches.add(new PunchEvent(p.id, victimId, dirX, dirZ));
+        }
+    }
+
     /** 한 tick 진행: 진행 단계를 갱신하고, 각 플레이어의 이동 의도를 검증·적용한다. */
     public void tick(long nowMs) {
         // 시작 요청 소비. 여기(루프 스레드)에서만 시계를 건드린다.
@@ -369,9 +475,13 @@ public class Room {
             log.info("방 {} 단계 전환 → {}", roomId, phases.phase());
         }
 
+        // 펀치는 이동보다 먼저 해소한다 — 이번 tick의 넉백 속도가 아래 이동 적분에 바로 실리도록.
+        resolvePunches(nowMs);
+
         double dt = props.tickSeconds();
         double speed = props.speed();
         long timeout = props.inputTimeoutMs();
+        double kbDecay = Math.exp(-dt / KNOCKBACK_TAU);
 
         for (Player p : players.values()) {
             double mx;
@@ -400,6 +510,19 @@ public class Room {
             double moveSpeed = sprint ? speed * props.sprintMultiplier() : speed;
             p.x += mx * moveSpeed * dt;
             p.z += mz * moveSpeed * dt;
+
+            // 펀치 넉백: 외부 속도를 위치에 적분하고 지수 감쇠. 이동 입력과 독립적으로 밀린다.
+            // (사람·봇 공통 — 봇도 맞으면 밀린다.) 아주 작아지면 0으로 끊어 미세 표류를 막는다.
+            if (p.kx != 0 || p.kz != 0) {
+                p.x += p.kx * dt;
+                p.z += p.kz * dt;
+                p.kx *= kbDecay;
+                p.kz *= kbDecay;
+                if (Math.abs(p.kx) < 0.01 && Math.abs(p.kz) < 0.01) {
+                    p.kx = 0;
+                    p.kz = 0;
+                }
+            }
 
             // 벽/장애물 충돌 해석(열린 감방문은 통과). 프론트 예측과 동일 로직.
             // 충돌은 2D(x/z)다 — 점프해도 장애물을 넘지 못한다. 넘게 하려면 Collision을 3D로
@@ -532,13 +655,21 @@ public class Room {
         return out == null ? Set.of() : out;
     }
 
-    /**
-     * 두 점이 같은 감방인지. 감방은 감방블록(|x|&lt;14, |z|&lt;11)을 복도(|z|&le;2.5)로 가른
-     * 네 사분면이다. 복도·통로에 서 있으면 어느 감방에도 속하지 않는다.
-     */
+    /** (x,z)가 속한 감방 인덱스. 어느 감방에도 없으면 -1(개활지·다른 건물). */
+    private static int cellOf(double x, double z) {
+        for (int i = 0; i < CELL_CENTERS.length; i++) {
+            if (Math.abs(x - CELL_CENTERS[i][0]) <= CELL_HALF_X
+                    && Math.abs(z - CELL_CENTERS[i][1]) <= CELL_HALF_Z) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** 두 점이 같은 감방 안인지. 개활지·다른 건물이면 false(감방만 서로 격리된 잠금 공간이라). */
     private static boolean sameCell(double ax, double az, double bx, double bz) {
-        return Math.abs(ax) < 14 && Math.abs(az) < 11 && Math.abs(az) > CORRIDOR_HALF_Z
-                && (ax < 0) == (bx < 0) && (az < 0) == (bz < 0);
+        int a = cellOf(ax, az);
+        return a >= 0 && a == cellOf(bx, bz);
     }
 
     public WorldSnapshot snapshot(long nowMs) {
@@ -588,7 +719,11 @@ public class Room {
         // 준비 상태도 같은 규약. 대기방에서만 쓰이지만 게임 중에도 굳이 지우지는 않는다.
         List<String> readyIds = readyDirty.getAndSet(false) ? new ArrayList<>(ready) : null;
 
+        // 펀치는 일어난 tick에만 싣고 곧바로 비운다(다음 tick에 다시 실리면 모션이 반복된다).
+        List<PunchEvent> punches = pendingPunches;
+        pendingPunches = null;
+
         return new WorldSnapshot(tick, states, roster, new ArrayList<>(solvedIds),
-                new ArrayList<>(openDoors), phase, phaseRemainMs, voteList, aiId, readyIds);
+                new ArrayList<>(openDoors), phase, phaseRemainMs, voteList, aiId, readyIds, punches);
     }
 }

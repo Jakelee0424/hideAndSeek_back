@@ -85,6 +85,24 @@ public class GameController {
                 msg.seq(), System.currentTimeMillis());
     }
 
+    /**
+     * 클라 → 서버: 펀치. /app/rooms/{roomId}/punch
+     *
+     * input과 같은 이유로 페이로드를 받지 않는다 — 누가 쳤는지는 세션에 묶인 playerId로 정하고,
+     * 누구를 맞혔는지·넉백 방향은 서버가 위치로 계산한다(클라가 대상을 지정하면 위조가 가능하다).
+     */
+    @MessageMapping("/rooms/{roomId}/punch")
+    public void punch(@DestinationVariable("roomId") String roomId,
+                      SimpMessageHeaderAccessor accessor) {
+        Room room = roomManager.get(roomId);
+        Map<String, Object> attrs = accessor.getSessionAttributes();
+        if (room == null || attrs == null
+                || !(attrs.get(ATTR_PLAYER) instanceof String playerId)) {
+            return;
+        }
+        room.punch(playerId);
+    }
+
     /** 클라 → 서버: 퍼즐 해결(협동 동기화). /app/rooms/{roomId}/solve
      *  해결 상태는 GameLoop의 스냅샷(solvedIds)으로 방 전체에 전파된다. */
     @MessageMapping("/rooms/{roomId}/solve")

@@ -29,24 +29,23 @@ final class Interactables {
     // 세로 벽(Collision의 Box(0, 6.65, 0.2, 4.15)) 안이었다.
     // 2026-07-19 방탈출 미션 개편(eec8f82)에서 같은 일이 또 났다 — 프론트가 12개로 늘었는데
     // 여기는 옛 3개(lockbox-1/door-1/note-1) 그대로였다.
+    // 지금은 캠퍼스 배치. 봇이 목표로 삼는 것만 담는다 — 감방 자물쇠 + 탈옥 단서·탈옥문.
     private static final List<Poi> ALL = List.of(
-            // 감방 자물쇠 4개. 풀면 그 방 감방문이 열린다(Room.LOCK_OPENS).
-            // 사람은 여기서 아케이드 미니게임을 한 판 이겨야 한다. 어떤 게임이 걸리는지는
-            // 프론트가 방 코드로 정하므로 서버는 모른다 — 봇에게도 알릴 게 없어 라벨에서 뺐다.
-            new Poi("lock-A", -7, 3.6, true, true, "게임 자물쇠(1호실)"),
-            new Poi("lock-B", 7, 3.6, true, true, "게임 자물쇠(2호실)"),
-            new Poi("lock-C", -7, -3.6, true, true, "게임 자물쇠(3호실)"),
-            new Poi("lock-D", 7, -3.6, true, true, "게임 자물쇠(4호실)"),
-            // 감방 안 쪽지 8개는 없앴다(2026-07-20). 자물쇠가 미니게임이 되면서 알려줄 답이
-            // 사라졌기 때문이다. 프론트 interactables.ts에서도 함께 지웠다 — 한쪽만 지우면
-            // 봇이 유령 좌표로 걸어가 벽에 박힌다(이 파일 위쪽 주석의 전례 참고).
-            //
-            // 배수관 철문과 그 단서. 단서는 감방 밖이라 누구나 닿는다.
-            // 철문은 botSolvable=false — 봇이 열면 봇이 게임을 끝내 버린다.
-            new Poi("note-mess", -35, 7, false, false, "배식 당번표(식당)"),
-            new Poi("note-west", -20, 1.5, false, false, "순찰 일지(서통로)"),
-            new Poi("note-yard", 38, -8, false, false, "담벼락 자국(운동장)"),
-            new Poi("escape-gate", 42, 0, true, false, "배수관 철문(운동장, 최종 탈출구)")
+            // 감방 자물쇠 4개. 풀면 그 방 문이 열린다(Room.LOCK_OPENS).
+            // 사람은 아케이드 미니게임을 한 판 이겨야 한다 — 어떤 게임인지는 프론트가 방 코드로
+            // 정하므로 서버는 모른다(봇에게도 알릴 게 없어 라벨에서 뺐다). 좌표는 도면 배치.
+            new Poi("lock-A", -59, 32, true, true, "게임 자물쇠(1-1)"),
+            new Poi("lock-B", -43, 32, true, true, "게임 자물쇠(1-2)"),
+            new Poi("lock-C", -27, 32, true, true, "게임 자물쇠(1-3)"),
+            new Poi("lock-D", -11, 32, true, true, "게임 자물쇠(1-4)"),
+            // 감방 안 쪽지는 POI에 넣지 않는다 — 미니게임이라 답이 없어 봇이 읽을 이유가 없다.
+            // 프론트엔 분위기용 쪽지가 남아 있지만 봇은 목표로 삼지 않는다(front-has-more는 안전).
+            // 최종 탈옥문과 그 단서. 단서는 감방 밖(식당·운동장 개활지)이라 누구나 닿는다.
+            // 탈옥문은 botSolvable=false — 봇이 열면 봇이 게임을 끝내 버린다.
+            new Poi("note-mess", 54, 39, false, false, "배식 당번표(식당)"),
+            new Poi("note-west", -20, 0, false, false, "순찰 일지(개활지)"),
+            new Poi("note-yard", 12, -18, false, false, "담벼락 자국(운동장)"),
+            new Poi("escape-gate", 0, -50, true, false, "탈옥문(교도소 정문, 최종 탈출구)")
     );
 
     private Interactables() {}
