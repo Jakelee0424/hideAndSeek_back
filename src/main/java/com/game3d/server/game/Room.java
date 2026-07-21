@@ -45,9 +45,9 @@ public class Room {
     /** 봇이 감방문을 여는 사거리(m). 프론트 prisonLayout.DOOR_RANGE 와 같은 값. */
     private static final double BOT_DOOR_RANGE = 3.0;
 
-    /** 감방 내부 반경(m). 스폰·같은-감방 판정에 쓴다. 프론트 감방 rect(14×12)의 절반. */
-    private static final double CELL_HALF_X = 7;
-    private static final double CELL_HALF_Z = 6;
+    /** 감방 내부 반경(m). 스폰·같은-감방 판정에 쓴다. 프론트 감방 rect(16×8)의 절반. */
+    private static final double CELL_HALF_X = 8;
+    private static final double CELL_HALF_Z = 4;
 
     /**
      * 첫 사람이 감방을 연 뒤 봇이 자기 방을 열기까지 기다리는 시간(ms).
@@ -69,10 +69,13 @@ public class Room {
         "lock-B", "cell-B",
         "lock-C", "cell-C",
         "lock-D", "cell-D",
-        // 통로 옆방(프론트 interactables.ts). 풀면 그 방 문이 열린다.
+        // 별관 복도 옆방(프론트 interactables.ts). 풀면 그 방 문이 열린다.
         "lock-work", "door-work",       // 작업장
         "lock-med", "door-med",         // 의무실
-        "lock-laundry", "door-laundry"  // 세탁실
+        "lock-laundry", "door-laundry", // 세탁실
+        // 최종 탈옥문 → 남벽의 파란 정문. 클리어 연출이자, 봇·/door 요청이 정문을
+        // 함부로 열지 못하게 막는 잠금(containsValue 검사)이기도 하다.
+        "escape-gate", "gate-main"
     );
 
     // ── 펀치(약한 넉백) ────────────────────────────────────────────────────────
@@ -91,12 +94,12 @@ public class Room {
     /** 넉백 감쇠 시간상수(s). 매 tick v *= exp(-dt/TAU). 약 3*TAU(≈0.36s)면 사실상 멈춘다. */
     static final double KNOCKBACK_TAU = 0.12;
 
-    /** 감방 4개의 중심(스폰 기준). 프론트 prisonLayout.CELLS(본관, z 30~42) 와 일치. */
+    /** 감방 4개의 중심(스폰 기준). 프론트 prisonLayout.CELLS(수감동, 2:2 마주보기)와 일치. */
     private static final double[][] CELL_CENTERS = {
-        {-59, 36}, // 감방 1-1
-        {-43, 36}, // 감방 1-2
-        {-27, 36}, // 감방 1-3
-        {-11, 36}, // 감방 1-4
+        {-30, 24}, // 감방 1-1 (북측)
+        {-14, 24}, // 감방 1-2 (북측)
+        {-30, 10}, // 감방 1-3 (남측)
+        {-14, 10}, // 감방 1-4 (남측)
     };
 
     private final String roomId;
@@ -351,9 +354,10 @@ public class Room {
         cellOfPlayer.put(playerId, idx);
 
         double[] c = CELL_CENTERS[idx];
+        // 감방 16×8 — 벽·침상에 끼지 않게 여유를 두고 뿌린다. 프론트 randomCellSpawn과 같은 범위.
         return new double[] {
-            c[0] + rnd.nextDouble(-5, 5),
-            c[1] + rnd.nextDouble(-4, 4),
+            c[0] + rnd.nextDouble(-6, 6),
+            c[1] + rnd.nextDouble(-2.5, 2.5),
         };
     }
 
@@ -562,24 +566,30 @@ public class Room {
                 }
             }
 
-            // 벽/장애물 충돌 해석(열린 감방문은 통과). 프론트 예측과 동일 로직.
-            // 충돌은 2D(x/z)다 — 점프해도 장애물을 넘지 못한다. 넘게 하려면 Collision을 3D로
-            // 바꿔야 하고 프론트 collision.ts도 같이 고쳐야 한다(이중 관리).
-            double[] r = Collision.resolve(p.x, p.z, openDoors);
+            // 벽/소품 충돌 해석(열린 감방문은 통과, 발높이로 층 판정). 프론트 예측과 동일 로직.
+            // XZ 밀어내기라 점프해도 장애물을 넘지 못한다 — 프론트 collision.ts와 이중 관리.
+            double[] r = Collision.resolve(p.x, p.z, p.y - Player.GROUND_Y, openDoors);
             p.x = r[0];
             p.z = r[1];
 
-            // 수직: 접지 중 점프 의도가 있으면 발사, 그 뒤엔 중력으로 적분. 착지하면 딱 지면에 고정.
-            // 누르고 있으면 착지 즉시 다시 뛴다(연속 점프) — 별도 엣지 판정은 두지 않았다.
+            // 수직: 바닥은 그 좌표의 지지면(1층 0 / 계단 램프 / 2층 FLOOR2_Y). STEP_UP 이하의
+            // 턱은 걸어서 스냅해 오르내린다(계단). 접지 중 점프 의도가 있으면 발사, 그 뒤엔
+            // 중력으로 적분. 누르고 있으면 착지 즉시 다시 뛴다(연속 점프) — 별도 엣지 판정 없음.
+            // 봇은 1층만 다니므로(웨이포인트가 전부 1층) 수직 적분을 건너뛴다 — y가 늘 GROUND_Y.
             if (!p.bot) {
-                if (p.grounded() && p.inputJump(nowMs, timeout)) {
-                    p.vy = props.jumpSpeed();
+                double floorY = Collision.groundHeight(p.x, p.z, p.y - Player.GROUND_Y) + Player.GROUND_Y;
+                boolean grounded = p.vy <= 0 && p.y - floorY <= Collision.STEP_UP;
+                if (grounded) {
+                    p.y = floorY; // 계단·턱 스냅(내려갈 때 튀지 않게)
+                    if (p.inputJump(nowMs, timeout)) {
+                        p.vy = props.jumpSpeed();
+                    }
                 }
-                if (!p.grounded() || p.vy > 0) {
+                if (!grounded || p.vy > 0) {
                     p.vy -= props.gravity() * dt;
                     p.y += p.vy * dt;
-                    if (p.y <= Player.GROUND_Y) {
-                        p.y = Player.GROUND_Y;
+                    if (p.y <= floorY) {
+                        p.y = floorY;
                         p.vy = 0;
                     }
                 }
@@ -615,7 +625,68 @@ public class Room {
                 p.rotationY = p.desiredRotationY();
             }
         }
+
+        resolvePlayerOverlaps();
         tick++;
+    }
+
+    // 대인 충돌 순회용 버퍼(핫패스 — tick마다 리스트를 새로 만들지 않는다).
+    private Player[] overlapBuf = new Player[8];
+
+    /**
+     * 플레이어끼리도 실체가 있다 — 겹치면 반씩 밀어 벌린다(프론트 pushOutOfPlayer와 같은 규약,
+     * 단 서버는 양쪽을 민다). 층이 다르면(발높이 차가 크면) 통과 — 2층과 1층은 딴 공간이다.
+     * 민 뒤에는 벽 충돌을 다시 해석해 벽 안으로 밀려 들어가지 않게 한다.
+     */
+    private void resolvePlayerOverlaps() {
+        int n = 0;
+        for (Player p : players.values()) {
+            if (n == overlapBuf.length) {
+                overlapBuf = java.util.Arrays.copyOf(overlapBuf, n * 2);
+            }
+            overlapBuf[n++] = p;
+        }
+        final double min = Collision.PLAYER_R * 2;
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                Player a = overlapBuf[i];
+                Player b = overlapBuf[j];
+                if (Math.abs(a.y - b.y) > 1.6) {
+                    continue;
+                }
+                double dx = b.x - a.x;
+                double dz = b.z - a.z;
+                double d2 = dx * dx + dz * dz;
+                if (d2 >= min * min) {
+                    continue;
+                }
+                double nx;
+                double nz;
+                double push;
+                if (d2 > 1e-8) {
+                    double d = Math.sqrt(d2);
+                    nx = dx / d;
+                    nz = dz / d;
+                    push = (min - d) / 2;
+                } else {
+                    nx = 1; // 완전히 겹침: 아무 방향으로나
+                    nz = 0;
+                    push = min / 2;
+                }
+                a.x -= nx * push;
+                a.z -= nz * push;
+                b.x += nx * push;
+                b.z += nz * push;
+                double[] ra = Collision.resolve(a.x, a.z, a.y - Player.GROUND_Y, openDoors);
+                a.x = ra[0];
+                a.z = ra[1];
+                double[] rb = Collision.resolve(b.x, b.z, b.y - Player.GROUND_Y, openDoors);
+                b.x = rb[0];
+                b.z = rb[1];
+            }
+        }
+        // 순회 뒤 참조를 비워 나간 플레이어가 버퍼에 붙들리지 않게 한다.
+        java.util.Arrays.fill(overlapBuf, 0, n, null);
     }
 
     /**

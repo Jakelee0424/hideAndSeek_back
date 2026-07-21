@@ -11,7 +11,11 @@ import com.game3d.server.dto.Role;
  */
 public class Player {
 
-    /** 접지 상태의 y(캡슐 반높이). 점프는 이 값을 바닥으로 삼는다. */
+    /**
+     * 캡슐 반높이. y는 캡슐 중심의 절대 높이 — 발바닥 높이 = y - GROUND_Y.
+     * 1층 접지면 y = GROUND_Y, 수감동 2층이면 y = Collision.FLOOR2_Y + GROUND_Y.
+     * 접지 판정·바닥 스냅은 Room.tick이 Collision.groundHeight로 좌표별 바닥을 구해서 한다.
+     */
     static final double GROUND_Y = 0.5;
 
     final String id;
@@ -124,17 +128,14 @@ public class Player {
         return (nowMs - lastInputAtMs) <= timeoutMs && jump;
     }
 
-    boolean grounded() {
-        return y <= GROUND_Y + 1e-6;
-    }
-
     double desiredRotationY() {
         return desiredRotationY;
     }
 
     /**
      * 매 tick 실리는 경량 상태. 위치는 2자리, 회전은 3자리로 반올림해 페이로드를 줄인다.
-     * y는 절대 좌표가 아니라 **지면 위 높이**로 보낸다(프론트의 발바닥 y=0 규약).
+     * y는 **발바닥 절대 높이**로 보낸다(1층 0, 수감동 2층 FLOOR2_Y, 점프 중 그 사이) —
+     * 프론트는 이 값을 그대로 position.y에 넣는다.
      */
     PlayerTick tickState() {
         return new PlayerTick(id, round(x, 100.0), round(y - GROUND_Y, 100.0),
