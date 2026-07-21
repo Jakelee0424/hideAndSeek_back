@@ -56,6 +56,12 @@ final class BotBrain {
     private final BotPlanner llm;
     private final long intervalMs;
 
+    /** 봇의 발화를 방으로 흘려보내는 통로. Room이 도배 제한·전송을 맡는다. */
+    private final java.util.function.Consumer<String> onSay;
+
+    /** 직전에 내보낸 말. 같은 문장 반복을 거른다. 플래너 스레드에서만 만진다. */
+    private volatile String lastSay;
+
     /** 호출 중복 방지. 응답이 주기보다 느려도 요청이 쌓이지 않는다. */
     private final AtomicBoolean inFlight = new AtomicBoolean();
 
@@ -104,9 +110,14 @@ final class BotBrain {
      */
     private final Set<String> visited = new LinkedHashSet<>();
 
-    BotBrain(BotPlanner llm, long intervalMs) {
+    /**
+     * @param onSay 봇이 채팅으로 흘릴 한마디를 받는 곳(Room::botSay). 플래너 스레드(가상 스레드)에서
+     *              호출되므로 받는 쪽은 스레드 안전해야 한다.
+     */
+    BotBrain(BotPlanner llm, long intervalMs, java.util.function.Consumer<String> onSay) {
         this.llm = llm;
         this.intervalMs = intervalMs;
+        this.onSay = onSay;
     }
 
     Goal goal() {
@@ -343,6 +354,19 @@ final class BotBrain {
                 } else if (planned != null) {
                     // 모델이 없는 id를 지어냈다. 무시하면 스크립트 목표가 그대로 산다.
                     log.warn("봇 계획 무효, 무시함: {} {}", planned.action(), planned.targetId());
+                }
+                // 말은 목표가 무효였어도 내보낸다. 둘은 별개다 —
+                // 엉뚱한 곳을 고른 계획이라고 해서 "이쪽은 다 뒤졌어" 같은 한마디까지
+                // 버릴 이유는 없고, 봇이 침묵하면 그 자체가 정체를 드러내는 신호가 된다.
+                if (planned != null && onSay != null) {
+                    String say = planned.say();
+                    // 직전과 똑같은 말은 버린다. 모델은 상태가 안 바뀌면 같은 문장을 그대로 다시
+                    // 내놓는데(실측: 한 판에 "가자, 끝내자" 2회·"식당에 가서 당번표…" 4회),
+                    // 사람은 그렇게 말하지 않아서 반복 자체가 정체를 드러내는 신호가 된다.
+                    if (say != null && !say.isBlank() && !say.equals(lastSay)) {
+                        lastSay = say;
+                        onSay.accept(say);
+                    }
                 }
             } catch (Exception e) {
                 log.warn("봇 계획 실패({}), 스크립트로 계속: {}", e.getClass().getSimpleName(), e.getMessage());

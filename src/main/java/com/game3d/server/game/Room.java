@@ -1,5 +1,6 @@
 package com.game3d.server.game;
 
+import com.game3d.server.dto.ChatEvent;
 import com.game3d.server.dto.PlayerTick;
 import com.game3d.server.dto.PunchEvent;
 import com.game3d.server.dto.RosterEntry;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -94,6 +96,16 @@ public class Room {
     /** 넉백 감쇠 시간상수(s). 매 tick v *= exp(-dt/TAU). 약 3*TAU(≈0.36s)면 사실상 멈춘다. */
     static final double KNOCKBACK_TAU = 0.12;
 
+    /** 채팅 한 줄의 최대 길이(자). 넘으면 자른다 — 거부하면 길게 쓴 사람은 이유도 모르고 말이 사라진다. */
+    private static final int CHAT_MAX_LEN = 120;
+    /** 채팅 최소 간격(ms). 도배 방지. 이 안에 또 보내면 조용히 버린다. */
+    private static final long CHAT_MIN_INTERVAL_MS = 700;
+    /**
+     * 한 tick에 내보낼 채팅 상한. 큐가 폭주해도 브로드캐스트가 tick을 잡아먹지 않게 한다
+     * (남은 건 다음 tick에 나간다 — 50ms 뒤라 사람 눈에는 차이가 없다).
+     */
+    private static final int CHAT_DRAIN_PER_TICK = 20;
+
     /** 감방 4개의 중심(스폰 기준). 프론트 prisonLayout.CELLS(수감동, 2:2 마주보기)와 일치. */
     private static final double[][] CELL_CENTERS = {
         {-30, 24}, // 감방 1-1 (북측)
@@ -127,6 +139,12 @@ public class Room {
     // 이 tick에 성사된 펀치들. tick()이 채우고 곧이어 snapshot()이 실어 보낸 뒤 비운다.
     // 둘 다 루프 스레드에서 순차 호출되므로 동기화가 필요 없다(GameLoop: tick → snapshot).
     private List<PunchEvent> pendingPunches;
+
+    // 아직 내보내지 않은 채팅. GameLoop이 tick 뒤에 비우며 /topic/rooms/{id}/chat 으로 보낸다.
+    //
+    // pendingPunches와 달리 동시성 큐인 이유: 펀치는 루프 스레드가 만들고 루프 스레드가 싣지만,
+    // 채팅은 STOMP 인바운드 풀(사람)과 루프 스레드(봇)가 함께 넣고 루프 스레드가 뺀다.
+    private final ConcurrentLinkedQueue<ChatEvent> pendingChat = new ConcurrentLinkedQueue<>();
 
     // 첫 감방문이 열린 시각(ms). 0이면 아직 아무도 못 나왔다. 봇 탈출 지연의 기준점.
     // 컨트롤러 스레드(사람 solve)에서 쓰고 루프 스레드(tick)에서 읽는다.
@@ -255,7 +273,8 @@ public class Room {
             // 준비된 것으로 실어 보내면 위장도 유지되고 클라 계산도 맞는다.
             ready.add(key);
             readyDirty.set(true);
-            return new Player(key, botNick(), s[0], s[1], new BotBrain(llm, planIntervalMs));
+            return new Player(key, botNick(), s[0], s[1],
+                    new BotBrain(llm, planIntervalMs, this::botSay));
         });
     }
 
@@ -402,6 +421,107 @@ public class Room {
             }
             p.requestPunch();
         }
+    }
+
+    /**
+     * 채팅 발화(수신 스레드). 방에 있는 사람만, 도배 제한을 통과한 것만 큐에 넣는다.
+     *
+     * 실제 전송은 GameLoop이 tick 뒤에 한다 — Room이 브로커를 들면 게임 로직에 Spring 메시징이
+     * 섞이고, 지금은 스냅샷도 펀치도 전부 "룸이 쌓고 루프가 보낸다"로 통일돼 있다.
+     *
+     * 순찰 중이어도 막지 않는다. 순찰에 걸리는 것은 <b>움직임</b>이지 말이 아니다 —
+     * 오히려 숨죽여 말을 맞추는 시간이라 채팅이 필요하다.
+     */
+    public void chat(String playerId, String text) {
+        Player p = players.get(playerId);
+        if (p == null) {
+            return; // 방에 없는 사람(입장 거절됐거나 이미 나갔다)
+        }
+        String body = sanitizeChat(text);
+        if (body == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!claimChatSlot(p, now)) {
+            return; // 도배. 조용히 버린다 — 오류를 돌려줘도 클라가 할 일이 없다.
+        }
+        pendingChat.add(new ChatEvent(p.id, p.nick, body, now));
+    }
+
+    /**
+     * 봇의 발화(루프 스레드). 사람과 <b>같은 큐·같은 형식</b>으로 나간다.
+     *
+     * 굳이 별도 경로를 두지 않는 이유가 핵심이다 — 채팅에 봇 표시가 조금이라도 묻으면
+     * 마지막 AI 지목 투표가 성립하지 않는다. 도배 제한도 사람과 똑같이 적용한다.
+     */
+    void botSay(String text) {
+        Player bot = players.get(BOT_ID);
+        if (bot == null) {
+            return;
+        }
+        // 결말에 들어섰으면 입을 다문다. 그 화면은 엔딩 오버레이가 전부 덮어 채팅이 보이지 않는데,
+        // 봇은 계속 계획을 세우므로 안 막으면 아무도 못 보는 말에 무료 한도만 쓴다(실측 2줄).
+        if (phases.phase() == GamePhase.ENDED) {
+            return;
+        }
+        String body = sanitizeChat(text);
+        if (body == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!claimChatSlot(bot, now)) {
+            return;
+        }
+        pendingChat.add(new ChatEvent(bot.id, bot.nick, body, now));
+    }
+
+    /**
+     * 발화 자리를 원자적으로 잡는다. 잡았으면 true.
+     *
+     * 읽고-검사하고-쓰기를 CAS 한 번으로 묶는 게 핵심이다. 나눠 놓으면 같은 사람이 연타한
+     * 메시지가 서로 다른 인바운드 스레드에서 동시에 처리되며 전부 낡은 값을 보고 통과한다
+     * (실측: 연타 3회 중 2회 통과). CAS에 진 쪽은 다른 스레드가 방금 자리를 가져간 것이므로
+     * 그대로 도배로 처리한다.
+     */
+    private static boolean claimChatSlot(Player p, long nowMs) {
+        long prev = p.lastChatAtMs.get();
+        if (nowMs - prev < CHAT_MIN_INTERVAL_MS) {
+            return false;
+        }
+        return p.lastChatAtMs.compareAndSet(prev, nowMs);
+    }
+
+    /**
+     * 본문 정리. 빈 말이면 null(보내지 않음).
+     *
+     * 개행을 공백으로 접는 이유: 클라 한 줄 UI라 여러 줄이 오면 레이아웃이 깨지고,
+     * 개행 도배로 화면을 밀어 올릴 수도 있다.
+     */
+    private static String sanitizeChat(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String s = raw.replaceAll("[\\r\\n\\t]+", " ").trim();
+        if (s.isEmpty()) {
+            return null;
+        }
+        return s.length() > CHAT_MAX_LEN ? s.substring(0, CHAT_MAX_LEN) : s;
+    }
+
+    /**
+     * 쌓인 채팅을 가져가고 비운다(루프 스레드). 없으면 빈 리스트.
+     * 한 번에 CHAT_DRAIN_PER_TICK 개까지만 — 남은 것은 다음 tick에 나간다.
+     */
+    public List<ChatEvent> drainChat() {
+        if (pendingChat.isEmpty()) {
+            return List.of();
+        }
+        List<ChatEvent> out = new ArrayList<>();
+        ChatEvent e;
+        while (out.size() < CHAT_DRAIN_PER_TICK && (e = pendingChat.poll()) != null) {
+            out.add(e);
+        }
+        return out;
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.game3d.server.net;
 
+import com.game3d.server.dto.ChatMessage;
 import com.game3d.server.dto.DoorMessage;
 import com.game3d.server.dto.InputMessage;
 import com.game3d.server.dto.JoinMessage;
@@ -168,6 +169,30 @@ public class GameController {
             return;
         }
         room.castVote(voterId, msg.targetId());
+    }
+
+    /**
+     * 클라 → 서버: 인게임 채팅. /app/rooms/{roomId}/chat
+     *
+     * 말한 사람은 input·vote와 같은 이유로 세션에 묶인 playerId를 쓴다. 여기서 페이로드의
+     * id를 믿으면 남의 이름으로 발언을 지어낼 수 있는데, 마지막 단계가 말을 근거로 AI를
+     * 가리는 투표라 발화자 위조는 게임을 통째로 무너뜨린다.
+     *
+     * 길이 제한·도배 제한·전송은 Room이 맡는다(GameLoop이 tick 뒤에 브로드캐스트).
+     */
+    @MessageMapping("/rooms/{roomId}/chat")
+    public void chat(@DestinationVariable("roomId") String roomId,
+                     @Payload ChatMessage msg,
+                     SimpMessageHeaderAccessor accessor) {
+        Room room = roomManager.get(roomId);
+        if (room == null || msg == null) {
+            return;
+        }
+        Map<String, Object> attrs = accessor.getSessionAttributes();
+        if (attrs == null || !(attrs.get(ATTR_PLAYER) instanceof String playerId)) {
+            return;
+        }
+        room.chat(playerId, msg.text());
     }
 
     /** 클라 → 서버: 감방문 열림 토글. /app/rooms/{roomId}/door */

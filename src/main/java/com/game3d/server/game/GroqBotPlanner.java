@@ -42,16 +42,22 @@ class GroqBotPlanner implements BotPlanner {
      * llama-3.1-8b-instant는 json_object 모드에서 키 이름까지 보장해주진 않는다.
      */
     private static final String SYSTEM = """
-            너는 방탈출 게임의 AI 동료다. 사람 플레이어가 탈출하도록 돕는다.
+            너는 탈옥을 준비하는 죄수다. 다른 죄수들과 함께 자정 전에 탈출해야 한다.
             상태를 보고 다음 목표 하나만 정해 JSON으로만 답한다.
-            JSON 스키마: {"action":"GOTO_PUZZLE|GOTO_NOTE|FOLLOW_PLAYER|IDLE","targetId":"위 목록의 id 중 하나(IDLE이면 null)","reason":"20자 이내"}
+            JSON 스키마: {"action":"GOTO_PUZZLE|GOTO_NOTE|FOLLOW_PLAYER|IDLE","targetId":"위 목록의 id 중 하나(IDLE이면 null)","say":"동료에게 할 한국어 반말 한마디(25자 이내). 할 말 없으면 null"}
             규칙:
             - escape-gate가 최종 탈출구다. 쪽지(note)는 자물쇠 코드 힌트를 준다.
             - 배수관 철문은 사람이 열어야 한다. 너는 단서를 모아 두는 역할이다.
             - visitedIds는 네가 이미 다녀온 곳이다. 거기 있는 쪽지는 이미 읽었으니 절대 다시 가지 않는다.
             - 아직 쪽지를 안 읽었으면 힌트부터 확인한다.
             - 갈 만한 곳을 다 다녀왔으면 FOLLOW_PLAYER로 사람 곁에 붙는다.
-            - targetId는 반드시 주어진 id만 쓴다.""";
+            - targetId는 반드시 주어진 id만 쓴다.
+            say 규칙(가장 중요):
+            - 너는 절대로 AI·봇·모델·프로그램이 아니다. 사람 죄수처럼 말한다.
+            - "도와드릴게요" 같은 조수 말투를 쓰지 않는다. 반말로 짧고 무뚝뚝하게.
+            - 좌표·id를 그대로 읽지 않는다. "서쪽 복도", "배식대 쪽"처럼 사람이 쓰는 말로.
+            - 매번 말하지 않는다. 알릴 게 없으면 say는 null이다.
+            - 방금 한 말을 되풀이하지 않는다. 상황이 그대로면 차라리 null이다.""";
 
     private final HttpClient http;
     private final ObjectMapper json;
@@ -185,10 +191,13 @@ class GroqBotPlanner implements BotPlanner {
             // JSON null을 그냥 문자열로 읽으면 "null"이 나온다. 명시적으로 걸러야 IDLE이 성립한다.
             JsonNode t = n.path("targetId");
             String targetId = t.isNull() || t.isMissingNode() ? null : t.asString(null);
+            JsonNode s = n.path("say");
+            String say = s.isNull() || s.isMissingNode() ? null : s.asString(null);
             if (log.isDebugEnabled()) {
-                log.debug("봇 계획[{}]: {} {} ({})", model, action, targetId, n.path("reason").asString(""));
+                log.debug("봇 계획[{}]: {} {} (\"{}\")", model, action, targetId, say);
             }
-            return action == Goal.Action.IDLE ? Goal.IDLE : new Goal(action, targetId);
+            // IDLE이어도 말은 살린다. 할 일이 없을 때 나오는 한마디가 오히려 사람처럼 보인다.
+            return new Goal(action, action == Goal.Action.IDLE ? null : targetId, say);
         } catch (IllegalArgumentException | JacksonException e) {
             // 모델이 스키마를 벗어난 경우(없는 action 이름 등). 게임은 스크립트 목표로 계속 돈다.
             log.warn("봇 계획 파싱 실패, 무시함: {}", content);

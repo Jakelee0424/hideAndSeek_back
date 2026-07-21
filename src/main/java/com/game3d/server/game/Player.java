@@ -49,6 +49,17 @@ public class Player {
     /** 마지막으로 펀치가 <b>성사</b>된 시각(ms). 루프 스레드만 쓴다. 쿨다운 판정 기준. */
     long lastPunchAtMs;
 
+    /**
+     * 마지막으로 채팅을 보낸 시각(ms). 도배 제한 판정 기준.
+     *
+     * volatile long이 아니라 AtomicLong인 이유: STOMP 인바운드는 스레드 풀이라 한 사람이
+     * 연타한 메시지들이 <b>동시에</b> 처리된다. 읽고-검사하고-쓰는 세 단계가 원자적이지 않으면
+     * 두 스레드가 모두 낡은 값을 보고 통과해 제한이 새어나간다(실측: 연타 3회 중 2회 통과).
+     * Room.join이 synchronized여야 했던 것과 같은 종류의 문제다.
+     */
+    final java.util.concurrent.atomic.AtomicLong lastChatAtMs =
+            new java.util.concurrent.atomic.AtomicLong();
+
     Role role = Role.HIDER;
 
     // 입력(다른 스레드에서 갱신) → 루프 스레드에서 읽음. 최신값만 유지.
