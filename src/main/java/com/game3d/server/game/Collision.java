@@ -32,21 +32,24 @@ final class Collision {
     static final double FLOOR2_Y = 4.5; // 2층 바닥 높이(발바닥 기준)
     static final double STEP_UP = 0.5;  // 걸어서 오를 수 있는 턱(계단은 이 스냅으로 오른다)
 
-    // 계단(수감동 복도 중앙, 북벽에 붙은 직선 계단). 동쪽 끝(X1)이 1층, 서쪽 끝(X0)이 2층.
-    private static final double STAIR_X0 = -25.2;
-    private static final double STAIR_X1 = -18.8;
-    private static final double STAIR_Z0 = 18.6;
-    private static final double STAIR_Z1 = 20;
+    // 계단(복도 서쪽 끝 중앙, 막다른 벽을 향해 오르는 직선 계단). 동쪽 끝(X1)이 1층,
+    // 서쪽 끝(X0)이 2층 — 꼭대기 랜딩에서 좌우(남·북) 테라스로 갈라진다.
+    // 양측 난간벽이 옆 진입을 막고, 1층 통행은 계단 남/북의 2m 통로로 지나간다.
+    private static final double STAIR_X0 = -36;
+    private static final double STAIR_X1 = -29.6;
+    private static final double STAIR_Z0 = 16;
+    private static final double STAIR_Z1 = 18;
 
     private record Rect(double x0, double z0, double x1, double z1) {}
 
-    /** 2층 바닥 슬래브(감방 두 열 + 복도, 계단 개구부 제외). */
+    /** 2층 바닥 슬래브: 감방 두 열 위 + 테라스형 복도(난간) + 계단 상단 랜딩(서쪽 끝).
+     *  복도 가운데(z 16~18)의 계단 동쪽은 아트리움 개구부 — 테라스에서 1층이 내려다보인다. */
     private static final Rect[] SLAB2 = {
         new Rect(-38, 20, -6, 28),
+        new Rect(-38, STAIR_Z1, -6, 20),
         new Rect(-38, 6, -6, 14),
         new Rect(-38, 14, -6, STAIR_Z0),
-        new Rect(-38, STAIR_Z0, STAIR_X0, 20),
-        new Rect(STAIR_X1, STAIR_Z0, -6, 20),
+        new Rect(-38, STAIR_Z0, STAIR_X0, STAIR_Z1),
     };
 
     private record Box(double cx, double cz, double hx, double hz) {}
@@ -81,9 +84,9 @@ final class Collision {
         // 의무실: 침대 3 + 약장(동벽)
         new Obst(25.5, 8.3, 0.6, 1.3, -1, 3), new Obst(30, 8.3, 0.6, 1.3, -1, 3),
         new Obst(34.5, 8.3, 0.6, 1.3, -1, 3), new Obst(36.8, 10, 0.5, 1.5, -1, 3),
-        // 연병장: 연단·깃대·벤치 2·농구골대 기둥
-        new Obst(-16, 1, 4, 1.3, -1, 3), new Obst(-24, 1, 0.15, 0.15, -1, 3),
-        new Obst(-14, -20, 2.5, 0.35, -1, 3), new Obst(-14, -4, 2.5, 0.35, -1, 3),
+        // 연병장(황량한 마당): 남서 구석의 벤치 셋 + 농구골대 기둥
+        new Obst(-37, -29.2, 2, 0.35, -1, 3), new Obst(-31, -29.2, 2, 0.35, -1, 3),
+        new Obst(-41.3, -25, 0.35, 2, -1, 3),
         new Obst(7.5, -12, 0.15, 0.15, -1, 3),
         // 정문 기둥 + 연결 복도 철창 기둥(x=-3: 출입구 동선(x=0)을 비켜 세운다)
         new Obst(-4.5, -30, 0.5, 0.5, -1, 3), new Obst(4.5, -30, 0.5, 0.5, -1, 3),
@@ -91,10 +94,13 @@ final class Collision {
         // 감시탑 안쪽 다리
         new Obst(-40.8, -28.8, 0.15, 0.15, -1, 3), new Obst(40.8, -28.8, 0.15, 0.15, -1, 3),
         new Obst(-40.8, 28.8, 0.15, 0.15, -1, 3), new Obst(40.8, 28.8, 0.15, 0.15, -1, 3),
-        // 계단 구조물(프론트 주석 참고): 난간벽(전 높이) · 계단 밑 진입 차단 · 2층 난간·막이
+        // 계단 구조물(복도 서쪽 끝 중앙 계단, 프론트 주석 참고): 양측 난간벽(전 높이)
+        // · 계단 밑 진입 차단 · 2층 테라스 난간(아트리움 가장자리) · 2층 복도 동측 막이
         new Obst((STAIR_X0 + STAIR_X1) / 2, STAIR_Z0, (STAIR_X1 - STAIR_X0) / 2, 0.1, -1, 99),
-        new Obst(-21.15, 19.3, 1.21, 0.7, -1, 0.4),
-        new Obst(STAIR_X1, 19.3, 0.08, 0.7, 3, 99),
+        new Obst((STAIR_X0 + STAIR_X1) / 2, STAIR_Z1, (STAIR_X1 - STAIR_X0) / 2, 0.1, -1, 99),
+        new Obst(-31.95, 17, 1.21, 0.9, -1, 0.4),
+        new Obst((STAIR_X1 - 6) / 2, STAIR_Z0, (-6 - STAIR_X1) / 2, 0.1, 3, 99),
+        new Obst((STAIR_X1 - 6) / 2, STAIR_Z1, (-6 - STAIR_X1) / 2, 0.1, 3, 99),
         new Obst(-6, 17, 0.2, 3, 3, 99),
     };
 

@@ -70,6 +70,10 @@ public class Room {
      */
     private static final long BOT_FOLLOW_DELAY_MS = 10_000;
 
+    /** 봇이 감방을 나온 뒤 자기 단서를 말하기까지의 지연(+지터). 나오자마자 말하면 스크립트 티가 난다. */
+    private static final long BOT_CLUE_DELAY_MS = 18_000;
+    private static final long BOT_CLUE_JITTER_MS = 12_000;
+
     /**
      * 감방 자물쇠 id → 풀면 열리는 감방문 id. 프론트 interactables.ts의 lockbox.opensDoor 와 같다.
      *
@@ -164,6 +168,12 @@ public class Room {
     // 탈옥문(escape-gate)이 풀린 시각(ms). 0이면 아직 안 열렸다. 색출(VOTE) 조기 전환의 기준점.
     // markSolved(컨트롤러 스레드 사람 solve / 루프 스레드 봇)에서 쓰고 tick(루프 스레드)에서 읽는다.
     private volatile long escapeCompletedAtMs;
+
+    // 봇의 감방 단서(표식·수) 발화 예약 시각(ms). 0=예약 전, -1=이미 말했다.
+    // 탈옥 코드 재설계(정보를 인원 수만큼 쪼갬)에서 봇 몫의 단서도 방에 공유돼야 코드가
+    // 완성된다 — 봇이 자기 감방을 나오면 잠시 뒤 스크립트로 1회만 말한다(EscapePlan 참고).
+    // markSolved(컨트롤러/루프)에서 예약하고 tick(루프)에서 소비한다.
+    private volatile long botClueSayAtMs;
 
     // AI 지목 투표(투표자 → 지목 대상). 다시 찍으면 덮어쓴다.
     private final Map<String, String> votes = new ConcurrentHashMap<>();
@@ -468,26 +478,30 @@ public class Room {
      *
      * 굳이 별도 경로를 두지 않는 이유가 핵심이다 — 채팅에 봇 표시가 조금이라도 묻으면
      * 마지막 AI 지목 투표가 성립하지 않는다. 도배 제한도 사람과 똑같이 적용한다.
+     *
+     * @return 실제로 큐에 실렸으면 true. 도배 제한 등으로 버려졌으면 false —
+     *         꼭 나가야 하는 스크립트 발화(감방 단서)는 이 값을 보고 다음 tick에 재시도한다.
      */
-    void botSay(String text) {
+    boolean botSay(String text) {
         Player bot = players.get(BOT_ID);
         if (bot == null) {
-            return;
+            return false;
         }
         // 결말에 들어섰으면 입을 다문다. 그 화면은 엔딩 오버레이가 전부 덮어 채팅이 보이지 않는데,
         // 봇은 계속 계획을 세우므로 안 막으면 아무도 못 보는 말에 무료 한도만 쓴다(실측 2줄).
         if (phases.phase() == GamePhase.ENDED) {
-            return;
+            return false;
         }
         String body = sanitizeChat(text);
         if (body == null) {
-            return;
+            return false;
         }
         long now = System.currentTimeMillis();
         if (!claimChatSlot(bot, now)) {
-            return;
+            return false;
         }
         pendingChat.add(new ChatEvent(bot.id, bot.nick, body, now));
+        return true;
     }
 
     /**
@@ -771,6 +785,20 @@ public class Room {
             }
         }
 
+        // 봇 감방 단서 발화: 예약 시각이 되면 자기 표식·수를 1회 말한다(스크립트 — Groq 판단과
+        // 무관하게 나간다). 도배 제한에 걸려 못 실었으면 다음 tick에 재시도한다.
+        if (botClueSayAtMs > 0 && nowMs >= botClueSayAtMs) {
+            Integer cellIdx = cellOfPlayer.get(BOT_ID);
+            if (cellIdx == null) {
+                botClueSayAtMs = -1; // 있을 수 없는 상태지만, 영원히 재시도하지는 않는다
+            } else {
+                EscapePlan.Clue c = EscapePlan.of(roomId).clue(cellIdx);
+                if (botSay("참, 내 방 바닥에 " + c.symbol() + " 표식이랑 수 " + c.value() + "가 새겨져 있더라")) {
+                    botClueSayAtMs = -1;
+                }
+            }
+        }
+
         resolvePlayerOverlaps();
         tick++;
     }
@@ -893,7 +921,19 @@ public class Room {
             if (firstCellOpenedAtMs == 0) {
                 firstCellOpenedAtMs = System.currentTimeMillis();
             }
+            // 봇이 자기 감방을 나왔다 → 잠시 뒤 자기 단서(표식·수)를 채팅에 1회 흘리도록 예약.
+            if (botClueSayAtMs == 0 && objectId.equals(botLockId())) {
+                botClueSayAtMs = System.currentTimeMillis()
+                        + BOT_CLUE_DELAY_MS
+                        + ThreadLocalRandom.current().nextLong(BOT_CLUE_JITTER_MS);
+            }
         }
+    }
+
+    /** 봇 감방의 자물쇠 id("lock-A"…). 봇이 없거나 감방 배정 전이면 null. */
+    private String botLockId() {
+        Integer idx = cellOfPlayer.get(BOT_ID);
+        return idx == null ? null : "lock-" + (char) ('A' + idx);
     }
 
     /**
