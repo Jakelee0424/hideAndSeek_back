@@ -3,8 +3,10 @@ package com.game3d.server.game;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -59,8 +61,22 @@ final class BotBrain {
     /** 봇의 발화를 방으로 흘려보내는 통로. Room이 도배 제한·전송을 맡는다. */
     private final java.util.function.Consumer<String> onSay;
 
-    /** 직전에 내보낸 말. 같은 문장 반복을 거른다. 플래너 스레드에서만 만진다. */
-    private volatile String lastSay;
+    /**
+     * 최근 내보낸 말(정규화형, 최대 {@link #RECENT_SAY_MEMORY}개). 같은 말 반복을 거른다.
+     *
+     * 직전 한 마디만 기억하면 "가자!"·"가자"처럼 살짝 다르거나 사이에 다른 말이 한 번만 끼어도
+     * 곧바로 다시 통과한다(실측: 식당에서 "가자"류 반복). 최근 몇 마디를 정규화해 들고 있으면
+     * 그 창 안의 반복은 전부 걸린다. inFlight가 플래너 스레드를 직렬화하므로 별도 동기화는 불필요.
+     */
+    private final Deque<String> recentSays = new ArrayDeque<>();
+    /** 최근 발화 기억 개수. */
+    private static final int RECENT_SAY_MEMORY = 6;
+
+    /** 마지막으로 실제 발화한 시각(ms). 최소 발화 간격 판정용. 플래너 스레드에서만 만진다. */
+    private long lastSayAtMs;
+    /** 봇 발화 최소 간격(ms). 이 안에는 새 말을 내보내지 않는다 — 짧은 사이에 연달아 쏟아내면
+     *  내용이 달라도 사람 같지 않다. 0이면 매 계획마다 말해 수다스러워진다. */
+    private static final long SAY_COOLDOWN_MS = 9000;
 
     /** 호출 중복 방지. 응답이 주기보다 느려도 요청이 쌓이지 않는다. */
     private final AtomicBoolean inFlight = new AtomicBoolean();
@@ -360,12 +376,22 @@ final class BotBrain {
                 // 버릴 이유는 없고, 봇이 침묵하면 그 자체가 정체를 드러내는 신호가 된다.
                 if (planned != null && onSay != null) {
                     String say = planned.say();
-                    // 직전과 똑같은 말은 버린다. 모델은 상태가 안 바뀌면 같은 문장을 그대로 다시
-                    // 내놓는데(실측: 한 판에 "가자, 끝내자" 2회·"식당에 가서 당번표…" 4회),
-                    // 사람은 그렇게 말하지 않아서 반복 자체가 정체를 드러내는 신호가 된다.
-                    if (say != null && !say.isBlank() && !say.equals(lastSay)) {
-                        lastSay = say;
-                        onSay.accept(say);
+                    // 반복을 거른다. 모델은 상태가 안 바뀌면 같은 말을 계속 내놓는데(실측: 식당에서
+                    // "가자"류 반복, "식당에 가서 당번표…" 4회), 사람은 그렇게 말하지 않아 반복 자체가
+                    // 정체를 드러낸다. 정규화해 최근 몇 마디와 비교하고(살짝 다른 변형·비연속 반복까지
+                    // 걸림), 최소 간격을 둬 연달아 쏟아내지 않게 한다. inFlight 덕에 이 블록은 직렬 실행.
+                    if (say != null && !say.isBlank()) {
+                        long sayNow = System.currentTimeMillis();
+                        String norm = normalizeSay(say);
+                        if (!norm.isEmpty() && !recentSays.contains(norm)
+                                && sayNow - lastSayAtMs >= SAY_COOLDOWN_MS) {
+                            recentSays.addLast(norm);
+                            if (recentSays.size() > RECENT_SAY_MEMORY) {
+                                recentSays.removeFirst();
+                            }
+                            lastSayAtMs = sayNow;
+                            onSay.accept(say);
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -420,5 +446,15 @@ final class BotBrain {
 
     private double distanceFrom(Player self) {
         return Math.hypot(targetX - self.x, targetZ - self.z);
+    }
+
+    /**
+     * 발화 비교용 정규화. 공백을 접고, 양끝의 글자/숫자가 아닌 것(문장부호·이모지·따옴표 등)을
+     * 걷어내고, 소문자로 만든다. "가자!" · "…가자~" · "가자 " → 모두 "가자"로 같아진다.
+     * \p{L}(모든 언어의 글자, 한글 포함)·\p{N}(숫자) 기준이라 한국어에도 안전하다.
+     */
+    private static String normalizeSay(String s) {
+        String t = s.replaceAll("\\s+", " ").trim().toLowerCase();
+        return t.replaceAll("^[^\\p{L}\\p{N}]+", "").replaceAll("[^\\p{L}\\p{N}]+$", "");
     }
 }
