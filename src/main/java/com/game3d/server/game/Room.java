@@ -31,6 +31,17 @@ public class Room {
     /** AI 봇의 고정 id. 스냅샷엔 일반 원격 플레이어처럼 실린다. */
     private static final String BOT_ID = "bot-1";
 
+    /** 최종 탈옥문 id. 이게 풀리면 팀 전체의 탈출이 끝난 것으로 본다(협동 오브젝트라 1회). */
+    private static final String ESCAPE_GATE_ID = "escape-gate";
+
+    /**
+     * 탈옥문 해제 뒤 색출(VOTE)로 넘어가기까지 기다리는 시간(ms).
+     *
+     * 프론트 EscapeOverlay의 HOLD_MS(5.2s)와 맞춘다 — 탈출 팡파르가 걷힌 직후 자연스럽게
+     * 이어지게. 이 지연이 없으면 연출과 투표 화면이 겹쳐 뜬다.
+     */
+    private static final long ESCAPE_TO_VOTE_DELAY_MS = 5_200;
+
     /**
      * 봇 죄수번호의 범위. 사람은 프론트 Lobby.randomPrisonerNick()이 같은 규칙으로 딴다.
      *
@@ -149,6 +160,10 @@ public class Room {
     // 첫 감방문이 열린 시각(ms). 0이면 아직 아무도 못 나왔다. 봇 탈출 지연의 기준점.
     // 컨트롤러 스레드(사람 solve)에서 쓰고 루프 스레드(tick)에서 읽는다.
     private volatile long firstCellOpenedAtMs;
+
+    // 탈옥문(escape-gate)이 풀린 시각(ms). 0이면 아직 안 열렸다. 색출(VOTE) 조기 전환의 기준점.
+    // markSolved(컨트롤러 스레드 사람 solve / 루프 스레드 봇)에서 쓰고 tick(루프 스레드)에서 읽는다.
+    private volatile long escapeCompletedAtMs;
 
     // AI 지목 투표(투표자 → 지목 대상). 다시 찍으면 덮어쓴다.
     private final Map<String, String> votes = new ConcurrentHashMap<>();
@@ -614,6 +629,16 @@ public class Room {
             log.info("방 {} 단계 전환 → {}", roomId, phases.phase());
         }
 
+        // 전원이 탈옥문을 열면(협동 오브젝트라 열리는 순간이 곧 팀 탈출 완료) 남은 MISSION/SHARING
+        // 타이머와 무관하게 잠깐의 탈출 연출 뒤 색출(VOTE)로 넘어간다. 안 그러면 서버는 탈출을
+        // 모른 채 방을 세워 두고, 플레이어는 투표 화면으로 못 넘어가 대기 상태로 남는다.
+        long escapedAt = escapeCompletedAtMs;
+        if (escapedAt != 0 && nowMs - escapedAt >= ESCAPE_TO_VOTE_DELAY_MS
+                && phases.skipTo(GamePhase.VOTE, nowMs)) {
+            phaseDirty.set(true);
+            log.info("방 {} 전원 탈출 완료 → 색출(VOTE) 조기 전환", roomId);
+        }
+
         // 펀치는 이동보다 먼저 해소한다 — 이번 tick의 넉백 속도가 아래 이동 적분에 바로 실리도록.
         resolvePunches(nowMs);
 
@@ -856,6 +881,10 @@ public class Room {
             return;
         }
         solvedIds.add(objectId);
+        // 탈옥문이 열렸다 — 팀 전체 탈출 완료. tick이 이 시각을 보고 잠깐 뒤 색출로 넘긴다.
+        if (ESCAPE_GATE_ID.equals(objectId) && escapeCompletedAtMs == 0) {
+            escapeCompletedAtMs = System.currentTimeMillis();
+        }
         String door = LOCK_OPENS.get(objectId);
         if (door != null && openDoors.add(door)) {
             log.info("방 {} 자물쇠 {} 해제 → 감방문 {} 열림", roomId, objectId, door);

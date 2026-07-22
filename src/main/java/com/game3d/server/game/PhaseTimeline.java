@@ -83,6 +83,35 @@ class PhaseTimeline {
         }
     }
 
+    /**
+     * 남은 시간과 무관하게 지정 단계의 시작으로 시계를 앞당긴다(조기 전환). 바뀌었으면 true.
+     *
+     * 전원이 탈출을 끝냈는데도 MISSION/SHARING 타이머가 다 흐를 때까지 방을 세워 두지 않으려는
+     * 것이다. 순찰 페널티와 같은 방식으로 경과 쪽을 밀어 그 단계 시작에 맞춘다 — 그러면 목표
+     * 단계는 온전한 제 길이를 받는다(예: VOTE로 당겨도 색출 시간은 5분 그대로).
+     *
+     * 이미 그 단계이거나 지난 뒤면 아무 일도 하지 않는다(뒤로 되감지 않는다).
+     */
+    boolean skipTo(GamePhase target, long nowMs) {
+        if (startedAtMs == 0 || current == target) {
+            return false;
+        }
+        long targetStart = 0;
+        for (GamePhase p : GamePhase.TIMELINE) {
+            if (p == target) {
+                break;
+            }
+            targetStart += props.durationMs(p);
+        }
+        long elapsed = elapsedMs(nowMs);
+        if (elapsed >= targetStart) {
+            return false; // 이미 그 단계이거나 지난 뒤 — 앞으로만 당긴다
+        }
+        penaltyMs += targetStart - elapsed;
+        current = target;
+        return true;
+    }
+
     /** 게임 시작 기준 경과 시간(ms). 페널티가 반영된 값 — 단계 시계는 이것을 본다. */
     long elapsedMs(long nowMs) {
         return startedAtMs == 0 ? 0 : nowMs - startedAtMs + penaltyMs;
