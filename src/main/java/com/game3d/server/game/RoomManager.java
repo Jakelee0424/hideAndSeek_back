@@ -69,7 +69,7 @@ public class RoomManager {
             Duration.ofSeconds(3),   // 예고
             Duration.ofSeconds(10),  // 걸리면 자정 10초 단축
             0.05,
-            0.25
+            0.08                     // 봇 실수 확률(운영값과 동일하게 낮춤 — application.yml 주석 참고)
     );
 
     /**
