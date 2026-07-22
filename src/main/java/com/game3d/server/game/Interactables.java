@@ -40,11 +40,15 @@ final class Interactables {
             new Poi("lock-D", -14, 13, true, true, "게임 자물쇠(1-4)"),
             // 감방 안 쪽지는 POI에 넣지 않는다 — 미니게임이라 답이 없어 봇이 읽을 이유가 없다.
             // 프론트엔 분위기용 쪽지가 남아 있지만 봇은 목표로 삼지 않는다(front-has-more는 안전).
-            // 최종 탈옥문과 그 단서. 단서는 감방 밖(식당·연병장 개활지)이라 누구나 닿는다.
-            // 탈옥문은 botSolvable=false — 봇이 열면 봇이 게임을 끝내 버린다.
-            new Poi("note-mess", 14, 24, false, false, "배식 당번표(식당)"),
-            new Poi("note-west", -28, -10, false, false, "순찰 일지(연병장 서편)"),
-            new Poi("note-yard", 10, -20, false, false, "담벼락 자국(연병장)"),
+            //
+            // 봇이 순회할 쪽지는 <b>별관 복도의 방 자물쇠 힌트 쪽지</b>로 둔다(항상 열린 복도라
+            // 봇이 닿는다). 탈옥문 코드 단서(note-code-*)는 잠긴 방 "안"으로 옮겼으므로 여기 넣지
+            // 않는다 — 넣으면 봇이 닫힌 문 앞으로 걸어가 멈춘다(감방 자물쇠와 같은 함정). 봇은
+            // 탈옥문을 풀지 않으니(botSolvable=false) 그 단서도 필요 없다.
+            new Poi("note-work1", 9.5, 15.6, false, false, "작업 지시서(별관 복도)"),
+            new Poi("note-med1", 25.5, 15.6, false, false, "약장 라벨(별관 복도)"),
+            new Poi("note-laundry2", 34.5, 18.4, false, false, "젖은 쪽지(별관 복도)"),
+            // 최종 탈옥문. botSolvable=false — 봇이 열면 봇이 게임을 끝내 버린다.
             new Poi("escape-gate", 0, -26, true, false, "탈옥문(교도소 정문, 최종 탈출구)")
     );
 
