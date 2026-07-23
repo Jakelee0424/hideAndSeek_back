@@ -75,8 +75,11 @@ final class BotBrain {
     /** 마지막으로 실제 발화한 시각(ms). 최소 발화 간격 판정용. 플래너 스레드에서만 만진다. */
     private long lastSayAtMs;
     /** 봇 발화 최소 간격(ms). 이 안에는 새 말을 내보내지 않는다 — 짧은 사이에 연달아 쏟아내면
-     *  내용이 달라도 사람 같지 않다. 0이면 매 계획마다 말해 수다스러워진다. */
-    private static final long SAY_COOLDOWN_MS = 9000;
+     *  내용이 달라도 사람 같지 않다. 0이면 매 계획마다 말해 수다스러워진다.
+     *  계획 주기(6초)당 say가 붙을 수 있어 9초로는 15분 한 판에 최대 ~100줄까지 쏟아졌다 —
+     *  25초로 올려 한 판 상한을 ~35줄로 낮춘다(프롬프트가 대부분 null을 내므로 실측은 더 적다).
+     *  ⚠️ 0이나 너무 큰 값 금지: 봇이 아예 안 말하면 "한 번도 안 떠든 놈 = AI"가 되어 투표가 무너진다. */
+    private static final long SAY_COOLDOWN_MS = 25000;
 
     /** 호출 중복 방지. 응답이 주기보다 느려도 요청이 쌓이지 않는다. */
     private final AtomicBoolean inFlight = new AtomicBoolean();
