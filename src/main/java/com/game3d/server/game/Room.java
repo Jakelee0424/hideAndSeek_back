@@ -361,6 +361,11 @@ public class Room {
 
     /** AI 지목 투표. 다시 찍으면 덮어쓴다. 자기 자신은 못 찍는다. */
     public void castVote(String voterId, String targetId) {
+        // 색출(VOTE) 단계에서만 받는다. 안 그러면 미리 찍어둔 표가 쌓여, 아래 조기 종료가
+        // VOTE 시작 즉시 발동하거나 결말 뒤에도 표가 바뀐다.
+        if (phases.phase() != GamePhase.VOTE) {
+            return;
+        }
         if (voterId == null || targetId == null || voterId.equals(targetId)
                 || !players.containsKey(targetId)) {
             return;
@@ -368,6 +373,21 @@ public class Room {
         if (!targetId.equals(votes.put(voterId, targetId))) {
             votesDirty.set(true);
         }
+    }
+
+    /** AI(봇)를 뺀 모든 사람 플레이어가 지목을 마쳤는가. 사람이 하나도 없으면 false. */
+    private boolean allHumansVoted() {
+        boolean anyHuman = false;
+        for (Map.Entry<String, Player> e : players.entrySet()) {
+            if (e.getValue().bot) {
+                continue;
+            }
+            anyHuman = true;
+            if (!votes.containsKey(e.getKey())) {
+                return false;
+            }
+        }
+        return anyHuman;
     }
 
     /**
@@ -651,6 +671,16 @@ public class Room {
                 && phases.skipTo(GamePhase.VOTE, nowMs)) {
             phaseDirty.set(true);
             log.info("방 {} 전원 탈출 완료 → 색출(VOTE) 조기 전환", roomId);
+        }
+
+        // 색출(VOTE) 단계에서 AI를 뺀 전원이 지목을 마치면, 남은 타이머를 기다리지 않고 결말로
+        // 넘어간다(탈출 조기 전환과 대칭). 봇은 투표하지 않으므로 "전원 = 사람 전원"이다.
+        // votesDirty를 세워 결말 스냅샷에 최종 집계가 함께 나가게 한다.
+        if (phases.phase() == GamePhase.VOTE && allHumansVoted()
+                && phases.skipTo(GamePhase.ENDED, nowMs)) {
+            phaseDirty.set(true);
+            votesDirty.set(true);
+            log.info("방 {} 전원 지목 완료 → 결말 조기 전환", roomId);
         }
 
         // 펀치는 이동보다 먼저 해소한다 — 이번 tick의 넉백 속도가 아래 이동 적분에 바로 실리도록.
