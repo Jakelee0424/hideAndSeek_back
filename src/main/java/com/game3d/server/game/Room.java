@@ -53,6 +53,18 @@ public class Room {
     private static final long ESCAPE_TO_VOTE_DELAY_MS = 5_200;
 
     /**
+     * 개인 감방 탈출(MISSION)이 이 시간을 넘기면 다른 사람이 대신 자물쇠를 풀어 줄 수 있다(협동 구제).
+     *
+     * 전원이 같은 시각(게임 시작)에 갇히고 각자 자기 방 미니게임을 풀어야 하는데, 손이 막힌
+     * 사람이 혼자 오래 갇혀 방 전체가 못 나아가는 걸 막으려는 것이다. MISSION 시작부터 잰다 —
+     * 그때까지 안 풀린 감방이 곧 "5분 넘게 갇힌 사람"이다. 열리면 복도에서 창살 너머로 그 방
+     * 자물쇠를 만질 수 있게 되고(프론트 canInteract), 대신 풀면 그 방 문이 열린다.
+     * 테스트 방은 미션이 60초라 정식 5분이면 절대 못 보므로 짧게(20초) 잡는다.
+     */
+    private static final long ASSIST_AFTER_MS = 5 * 60_000L;
+    private static final long ASSIST_AFTER_MS_TEST = 20_000L;
+
+    /**
      * 봇 죄수번호의 범위. 사람은 프론트 Lobby.randomPrisonerNick()이 같은 규칙으로 딴다.
      *
      * 예전엔 닉이 그냥 "AI"였다가, 그다음엔 사람 이름("민준"·"서연"…)이었다. 지금은 사람도
@@ -195,6 +207,19 @@ public class Room {
     // markSolved(컨트롤러/루프)에서 예약하고 tick(루프)에서 소비한다.
     private volatile long botClueSayAtMs;
 
+    // 감방 탈출(MISSION)이 시작된 시각(ms). 0이면 아직 MISSION 전. 협동 구제 개방의 기준점.
+    // tick(루프 스레드)에서만 쓰고 읽는다.
+    private volatile long missionStartedAtMs;
+
+    // 협동 구제(남의 감방 자물쇠 대신 풀기) 개방 여부. 한 번 열리면 유지된다.
+    // MISSION 시작 후 ASSIST_AFTER_MS가 지나면 tick이 연다. 로스터와 같은 규약으로 바뀔 때·
+    // 입장 시에만 스냅샷에 싣는다(중간 입장자도 이미 열렸음을 알아야 한다).
+    private volatile boolean assistOpen;
+    private final AtomicBoolean assistDirty = new AtomicBoolean();
+
+    /** 협동 구제 개방까지의 시간(ms). 테스트 방은 짧게 잡는다. 생성자에서 확정. */
+    private final long assistAfterMs;
+
     // AI 지목 투표(투표자 → 지목 대상). 다시 찍으면 덮어쓴다.
     private final Map<String, String> votes = new ConcurrentHashMap<>();
     private final AtomicBoolean votesDirty = new AtomicBoolean();
@@ -236,6 +261,8 @@ public class Room {
         this.llm = llm;
         this.planIntervalMs = planIntervalMs;
         this.autoStart = autoStart;
+        // 테스트 방(autoStart)은 미션이 60초라 정식 5분이면 협동 구제를 볼 수가 없다 → 20초로.
+        this.assistAfterMs = autoStart ? ASSIST_AFTER_MS_TEST : ASSIST_AFTER_MS;
     }
 
     public String roomId() {
@@ -294,6 +321,9 @@ public class Room {
         phaseDirty.set(true);  // 중간 입장자에게 현재 단계·남은 시간 1회 전송
         readyDirty.set(true);  // 새로 들어온 사람도 남들의 준비 상태를 봐야 한다
         patrolDirty.set(true); // 순찰 도중에 들어왔다면 지금 순찰 중임을 알아야 한다
+        if (assistOpen) {
+            assistDirty.set(true); // 협동 구제가 이미 열렸다면 중간 입장자도 알아야 한다
+        }
         // 테스트 방은 준비·시작을 기다리지 않는다. 단계가 LOBBY를 벗어나면 프론트가 알아서
         // 게임 화면으로 넘겨주므로(대기방의 phase 감시), 클라는 손볼 게 없다.
         if (autoStart) {
@@ -681,6 +711,20 @@ public class Room {
                 votesDirty.set(true);
             }
             log.info("방 {} 단계 전환 → {}", roomId, phases.phase());
+        }
+
+        // 개인 감방 탈출(MISSION)이 오래 걸리면 다른 사람이 대신 풀어 줄 수 있게 연다(협동 구제).
+        // 전원이 같은 시각(게임 시작)에 갇히므로 MISSION 시작부터 재는 창 하나면 충분하다 —
+        // 그 시점까지 안 풀린 감방이 곧 "오래 갇힌 사람"이다.
+        if (missionStartedAtMs == 0 && phases.phase() == GamePhase.MISSION) {
+            missionStartedAtMs = nowMs;
+        }
+        if (!assistOpen && missionStartedAtMs != 0
+                && nowMs - missionStartedAtMs >= assistAfterMs) {
+            assistOpen = true;
+            assistDirty.set(true);
+            log.info("방 {} 개인 탈출 {}s 경과 → 협동 구제 개방(남의 감방 자물쇠 대신 풀기 허용)",
+                    roomId, assistAfterMs / 1000);
         }
 
         // 전원이 탈옥문을 열면(협동 오브젝트라 열리는 순간이 곧 팀 탈출 완료) 남은 MISSION/SHARING
@@ -1176,6 +1220,10 @@ public class Room {
         // 준비 상태도 같은 규약. 대기방에서만 쓰이지만 게임 중에도 굳이 지우지는 않는다.
         List<String> readyIds = readyDirty.getAndSet(false) ? new ArrayList<>(ready) : null;
 
+        // 협동 구제 개방도 같은 규약 — 열리는 순간과 입장 시에만 싣는다. dirty가 서 있을 땐
+        // 항상 assistOpen=true이므로(닫히는 일이 없다) true만 나간다.
+        Boolean assist = assistDirty.getAndSet(false) ? Boolean.TRUE : null;
+
         // 펀치는 일어난 tick에만 싣고 곧바로 비운다(다음 tick에 다시 실리면 모션이 반복된다).
         List<PunchEvent> punches = pendingPunches;
         pendingPunches = null;
@@ -1197,6 +1245,6 @@ public class Room {
 
         return new WorldSnapshot(tick, states, roster, new ArrayList<>(solvedIds),
                 new ArrayList<>(openDoors), phase, phaseRemainMs, voteList, aiId, readyIds,
-                punches, patrolState, patrolRemainMs, patrolCaughtId, reimprisons);
+                punches, patrolState, patrolRemainMs, patrolCaughtId, reimprisons, assist);
     }
 }

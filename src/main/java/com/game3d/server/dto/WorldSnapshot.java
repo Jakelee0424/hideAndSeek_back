@@ -22,6 +22,8 @@ import java.util.List;
  *              로스터와 같은 규약 — 바뀔 때와 입장 시에만 포함.
  *   patrolRemainMs: 그 상태가 끝나기까지 남은 시간. 카운트다운은 클라가 자체 진행한다.
  *   patrolCaughtId: 이번 순찰에서 걸린 사람의 id. 아무도 안 걸렸으면 null.
+ *   assist:    협동 구제 개방(남의 감방 자물쇠를 대신 풀 수 있는 상태). 개인 탈출이 오래 걸리면
+ *              열린다. 로스터와 같은 규약 — 열리는 순간·입장 시에만 true, 그 외 null → 생략.
  *
  * ⚠️ 필드를 더할 때 <b>박싱 타입</b>(Long/Boolean)을 쓸 것. 서버→클라 방향이라 구버전 클라가
  *    깨지진 않지만, NON_NULL 생략이 먹으려면 null을 담을 수 있어야 한다.
@@ -43,5 +45,6 @@ public record WorldSnapshot(
         String patrol,
         Long patrolRemainMs,
         String patrolCaughtId,
-        List<ReimprisonEvent> reimprisons
+        List<ReimprisonEvent> reimprisons,
+        Boolean assist
 ) {}
