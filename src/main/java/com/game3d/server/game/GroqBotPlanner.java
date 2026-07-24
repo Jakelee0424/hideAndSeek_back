@@ -46,7 +46,8 @@ class GroqBotPlanner implements BotPlanner {
             상태를 보고 다음 목표 하나만 정해 JSON으로만 답한다.
             JSON 스키마: {"action":"GOTO_PUZZLE|GOTO_NOTE|FOLLOW_PLAYER|IDLE","targetId":"위 목록의 id 중 하나(IDLE이면 null)","say":"동료에게 할 한국어 반말 한마디(25자 이내). 할 말 없으면 null"}
             규칙:
-            - escape-gate가 최종 탈출구다. 쪽지(note)는 자물쇠 코드 힌트를 준다.
+            - 세탁실 뒤 배수관(escape-pipe)이 최종 탈출구다. 남쪽 정문은 함정이니 가지 않는다.
+            - 쪽지(note)는 자물쇠 코드 힌트를 준다.
             - 배수관 철문은 사람이 열어야 한다. 너는 단서를 모아 두는 역할이다.
             - visitedIds는 네가 이미 다녀온 곳이다. 거기 있는 쪽지는 이미 읽었으니 절대 다시 가지 않는다.
             - 아직 쪽지를 안 읽었으면 힌트부터 확인한다.

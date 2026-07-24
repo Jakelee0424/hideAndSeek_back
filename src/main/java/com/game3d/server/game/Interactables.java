@@ -51,8 +51,9 @@ final class Interactables {
             new Poi("note-work1", 9.5, 15.6, false, false, "작업 지시서(별관 복도)"),
             new Poi("note-med1", 25.5, 15.6, false, false, "약장 라벨(별관 복도)"),
             new Poi("note-laundry2", 34.5, 18.4, false, false, "젖은 쪽지(별관 복도)"),
-            // 최종 탈옥문. botSolvable=false — 봇이 열면 봇이 게임을 끝내 버린다.
-            new Poi("escape-gate", 0, -26, true, false, "탈옥문(교도소 정문, 최종 탈출구)")
+            // 최종 탈출구(세탁실 뒤 배수관). botSolvable=false — 봇이 열면 봇이 게임을 끝내 버린다.
+            // 정문은 더 이상 출구가 아니라 함정이라 POI에서 뺐다(봇이 함정으로 걸어가면 안 된다).
+            new Poi("escape-pipe", 30, 29, true, false, "배수관(세탁실 뒤, 최종 탈출구)")
     );
 
     private Interactables() {}

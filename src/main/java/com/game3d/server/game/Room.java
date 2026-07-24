@@ -3,6 +3,7 @@ package com.game3d.server.game;
 import com.game3d.server.dto.ChatEvent;
 import com.game3d.server.dto.PlayerTick;
 import com.game3d.server.dto.PunchEvent;
+import com.game3d.server.dto.ReimprisonEvent;
 import com.game3d.server.dto.RosterEntry;
 import com.game3d.server.dto.VoteEntry;
 import com.game3d.server.dto.WorldSnapshot;
@@ -31,8 +32,17 @@ public class Room {
     /** AI 봇의 고정 id. 스냅샷엔 일반 원격 플레이어처럼 실린다. */
     private static final String BOT_ID = "bot-1";
 
-    /** 최종 탈옥문 id. 이게 풀리면 팀 전체의 탈출이 끝난 것으로 본다(협동 오브젝트라 1회). */
-    private static final String ESCAPE_GATE_ID = "escape-gate";
+    /** 최종 탈출구(세탁실 뒤 배수관) id. 이게 풀리면 팀 전체의 탈출이 끝난 것으로 본다(협동 오브젝트라 1회). */
+    private static final String ESCAPE_PIPE_ID = "escape-pipe";
+
+    // ── 정문 함정(재수감) ──────────────────────────────────────────────
+    // 정문(gate-main)은 닫혀 있고, 정문 자물쇠(gate-lock)의 코드를 주변 힌트로 풀면 열린다.
+    // 여는 바로 그 순간이 함정 — 무작위로 사람 REIMPRISON_COUNT명을 재수감한다. 진짜 출구는
+    // 세탁실 뒤 배수관(escape-pipe). 프론트 interactables.ts의 gate-lock과 id가 같아야 한다.
+    /** 정문 자물쇠 id. 이게 풀리면 함정이 발동한다. */
+    private static final String GATE_LOCK_ID = "gate-lock";
+    /** 함정 1회당 재수감 인원. */
+    private static final int REIMPRISON_COUNT = 2;
 
     /**
      * 탈옥문 해제 뒤 색출(VOTE)로 넘어가기까지 기다리는 시간(ms).
@@ -90,9 +100,12 @@ public class Room {
         "lock-work", "door-work",       // 작업장
         "lock-med", "door-med",         // 의무실
         "lock-laundry", "door-laundry", // 세탁실
-        // 최종 탈옥문 → 남벽의 파란 정문. 클리어 연출이자, 봇·/door 요청이 정문을
-        // 함부로 열지 못하게 막는 잠금(containsValue 검사)이기도 하다.
-        "escape-gate", "gate-main"
+        // 정문 자물쇠 → 남벽 정문. 풀면 정문이 열리지만 그게 곧 함정이다(markSolved에서 발동 신호).
+        // containsValue 검사로 봇·/door 요청이 정문을 함부로 열지 못하게도 막는다.
+        "gate-lock", "gate-main",
+        // 최종 탈출구(배수관) → 북벽 세탁실 뒤 배수관 해치. 클리어 연출이자, 봇·/door 요청이
+        // 해치를 함부로 열지 못하게 막는 잠금(containsValue 검사)이기도 하다.
+        "escape-pipe", "pipe-hatch"
     );
 
     // ── 펀치(약한 넉백) ────────────────────────────────────────────────────────
@@ -155,6 +168,13 @@ public class Room {
     // 둘 다 루프 스레드에서 순차 호출되므로 동기화가 필요 없다(GameLoop: tick → snapshot).
     private List<PunchEvent> pendingPunches;
 
+    // 이 tick에 정문 함정으로 재수감된 사람들. pendingPunches와 같은 규약(루프 스레드 전용).
+    private List<ReimprisonEvent> pendingReimprisons;
+
+    // 정문 자물쇠(gate-lock)가 풀렸다는 신호. 컨트롤러 스레드(사람 solve)가 세우고 tick(루프 스레드)이
+    // 소비해 재수감을 실행한다 — 위치·solved 변경은 반드시 루프 스레드에서만 해야 하기 때문.
+    private volatile boolean gateTrapPending;
+
     // 아직 내보내지 않은 채팅. GameLoop이 tick 뒤에 비우며 /topic/rooms/{id}/chat 으로 보낸다.
     //
     // pendingPunches와 달리 동시성 큐인 이유: 펀치는 루프 스레드가 만들고 루프 스레드가 싣지만,
@@ -165,7 +185,7 @@ public class Room {
     // 컨트롤러 스레드(사람 solve)에서 쓰고 루프 스레드(tick)에서 읽는다.
     private volatile long firstCellOpenedAtMs;
 
-    // 탈옥문(escape-gate)이 풀린 시각(ms). 0이면 아직 안 열렸다. 색출(VOTE) 조기 전환의 기준점.
+    // 배수관(escape-pipe)이 풀린 시각(ms). 0이면 아직 안 열렸다. 색출(VOTE) 조기 전환의 기준점.
     // markSolved(컨트롤러 스레드 사람 solve / 루프 스레드 봇)에서 쓰고 tick(루프 스레드)에서 읽는다.
     private volatile long escapeCompletedAtMs;
 
@@ -830,7 +850,73 @@ public class Room {
         }
 
         resolvePlayerOverlaps();
+
+        // 정문 함정: 사람이 정문 코드를 푼 tick에 발동한다(컨트롤러 스레드가 세운 신호를 여기서 소비).
+        // 위치·solvedIds 변경을 루프 스레드로 몰기 위한 지연이다(권위 서버 규약).
+        if (gateTrapPending) {
+            gateTrapPending = false;
+            reimprisonRandomHumans();
+        }
+
         tick++;
+    }
+
+    /**
+     * 무작위로 사람 REIMPRISON_COUNT명을 골라 재수감한다.
+     *
+     * 봇은 제외한다 — 봇을 감방에 돌려보내고 문을 다시 잠그면 봇이 자기 방에 갇혀 다시 못 나오고
+     * (자물쇠를 이미 "풀었다"고 여겨 재해제 스크립트가 다시 돌지 않는다), 마지막 AI 지목에서
+     * 혼자 감방에 처박힌 놈 = AI가 되어 게임이 무너진다. "전원"은 탈출을 시도하는 사람들이다.
+     */
+    private void reimprisonRandomHumans() {
+        List<Player> humans = new ArrayList<>();
+        for (Player p : players.values()) {
+            if (!p.bot) {
+                humans.add(p);
+            }
+        }
+        if (humans.isEmpty()) {
+            return;
+        }
+        ThreadLocalRandom rnd = ThreadLocalRandom.current();
+        // 부분 Fisher–Yates: 앞 n명만 무작위로 뽑는다.
+        int n = Math.min(REIMPRISON_COUNT, humans.size());
+        for (int i = 0; i < n; i++) {
+            int j = i + rnd.nextInt(humans.size() - i);
+            Player tmp = humans.get(i);
+            humans.set(i, humans.get(j));
+            humans.set(j, tmp);
+            reimprison(humans.get(i));
+        }
+        log.info("방 {} 정문 함정 발동 → 사람 {}명 재수감", roomId, n);
+    }
+
+    /**
+     * 한 사람을 재수감한다: 배정된 감방으로 순간이동 + 그 방 자물쇠를 다시 잠근다(감방문 닫힘).
+     * 사람은 미니게임을 다시 이겨야 나온다. victim 본인 클라는 이 이벤트를 받아 예측 위치를 스냅한다.
+     */
+    private void reimprison(Player p) {
+        Integer idx = cellOfPlayer.get(p.id);
+        if (idx == null) {
+            return; // 감방 배정 전이면 보낼 곳이 없다(있을 수 없는 상태)
+        }
+        double[] c = CELL_CENTERS[idx];
+        p.x = c[0];
+        p.z = c[1];
+        p.y = Player.GROUND_Y;
+        p.vy = 0;
+        p.kx = 0;
+        p.kz = 0;
+        // 그 방을 다시 잠근다: 자물쇠 solved 해제 + 감방문 닫기. CELL_CENTERS 인덱스 = 감방 A~D 순서.
+        char letter = (char) ('A' + idx);
+        String lock = "lock-" + letter;
+        String door = "cell-" + letter;
+        solvedIds.remove(lock);
+        openDoors.remove(door);
+        if (pendingReimprisons == null) {
+            pendingReimprisons = new ArrayList<>();
+        }
+        pendingReimprisons.add(new ReimprisonEvent(p.id, c[0], c[1], lock));
     }
 
     // 대인 충돌 순회용 버퍼(핫패스 — tick마다 리스트를 새로 만들지 않는다).
@@ -938,10 +1024,15 @@ public class Room {
         if (objectId == null || objectId.isBlank()) {
             return;
         }
-        solvedIds.add(objectId);
-        // 탈옥문이 열렸다 — 팀 전체 탈출 완료. tick이 이 시각을 보고 잠깐 뒤 색출로 넘긴다.
-        if (ESCAPE_GATE_ID.equals(objectId) && escapeCompletedAtMs == 0) {
+        boolean added = solvedIds.add(objectId);
+        // 배수관이 뚫렸다 — 팀 전체 탈출 완료. tick이 이 시각을 보고 잠깐 뒤 색출로 넘긴다.
+        if (ESCAPE_PIPE_ID.equals(objectId) && escapeCompletedAtMs == 0) {
             escapeCompletedAtMs = System.currentTimeMillis();
+        }
+        // 정문 자물쇠를 처음 푼 순간이 곧 함정 발동 신호. 실제 재수감은 tick(루프 스레드)이 실행한다
+        // — 여긴 컨트롤러 스레드일 수 있어 위치·solvedIds를 직접 만지면 안 된다.
+        if (added && GATE_LOCK_ID.equals(objectId)) {
+            gateTrapPending = true;
         }
         String door = LOCK_OPENS.get(objectId);
         if (door != null && openDoors.add(door)) {
@@ -1089,6 +1180,10 @@ public class Room {
         List<PunchEvent> punches = pendingPunches;
         pendingPunches = null;
 
+        // 재수감도 펀치와 같은 규약 — 발동 tick에만 싣고 곧바로 비운다.
+        List<ReimprisonEvent> reimprisons = pendingReimprisons;
+        pendingReimprisons = null;
+
         // 순찰도 로스터와 같은 규약 — 상태가 바뀔 때, 누가 걸릴 때, 입장할 때만 싣는다.
         String patrolState = null;
         Long patrolRemainMs = null;
@@ -1102,6 +1197,6 @@ public class Room {
 
         return new WorldSnapshot(tick, states, roster, new ArrayList<>(solvedIds),
                 new ArrayList<>(openDoors), phase, phaseRemainMs, voteList, aiId, readyIds,
-                punches, patrolState, patrolRemainMs, patrolCaughtId);
+                punches, patrolState, patrolRemainMs, patrolCaughtId, reimprisons);
     }
 }

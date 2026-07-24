@@ -17,6 +17,7 @@ import java.util.List;
  *   aiId:      진짜 AI의 id. <b>ENDED 단계에서만</b> 실린다. 그 전에 주면 투표가 무의미해진다.
  *   readyIds:  대기방에서 준비를 마친 사람들. 로스터와 같은 규약 — 바뀔 때만 포함.
  *   punches:   이 tick에 성사된 펀치들. 위치와 달리 일어난 순간에만 실린다(그 외 null → 생략).
+ *   reimprisons: 이 tick에 정문 함정으로 재수감된 사람들. 함정 발동 순간에만 실린다(그 외 null).
  *   patrol:    정기 순찰 상태(Patrol.State 이름: WARNING/ACTIVE). 순찰이 없으면 NONE.
  *              로스터와 같은 규약 — 바뀔 때와 입장 시에만 포함.
  *   patrolRemainMs: 그 상태가 끝나기까지 남은 시간. 카운트다운은 클라가 자체 진행한다.
@@ -41,5 +42,6 @@ public record WorldSnapshot(
         List<PunchEvent> punches,
         String patrol,
         Long patrolRemainMs,
-        String patrolCaughtId
+        String patrolCaughtId,
+        List<ReimprisonEvent> reimprisons
 ) {}
