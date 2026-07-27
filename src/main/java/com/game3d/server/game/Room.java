@@ -110,7 +110,7 @@ public class Room {
         "lock-C", "cell-C",
         "lock-D", "cell-D",
         // 별관 복도 옆방(프론트 interactables.ts). 풀면 그 방 문이 열린다.
-        "lock-work", "door-work",       // 작업장
+        // (작업장은 문 자물쇠를 없애고 상시 개방으로 바꿨다 — 방 안 퀴즈로 표식을 해금한다.)
         "lock-med", "door-med",         // 의무실
         "lock-laundry", "door-laundry", // 세탁실
         // 정문 자물쇠 → 남벽 정문. 풀면 정문이 열리지만 그게 곧 함정이다(markSolved에서 발동 신호).
@@ -899,7 +899,7 @@ public class Room {
                 botClueSayAtMs = -1; // 있을 수 없는 상태지만, 영원히 재시도하지는 않는다
             } else {
                 EscapePlan.Clue c = EscapePlan.of(roomId).clue(cellIdx);
-                if (botSay("참, 내 방 바닥에 " + c.symbol() + " 표식이랑 수 " + c.value() + "가 새겨져 있더라")) {
+                if (botSay("참, 별관 어느 방 벽에서 " + c.symbol() + " 표식을 봤어")) {
                     botClueSayAtMs = -1;
                 }
             }

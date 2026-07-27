@@ -145,7 +145,7 @@ final class Collision {
         new Bldg(6, 20, 22, 28, new Opening('S', 14, 4, null)),              // 식당(개방)
         new Bldg(22, 20, 38, 28, new Opening('S', 30, 2, "door-laundry"), new Opening('W', 24, 8, null),
                 new Opening('N', 22, 0.4, null), new Opening('S', 22, 0.4, null)),
-        new Bldg(6, 6, 22, 14, new Opening('N', 14, 2, "door-work")),        // 작업장
+        new Bldg(6, 6, 22, 14, new Opening('N', 14, 2, null)),               // 작업장(문 상시 개방 — 방 안 퀴즈로 표식 해금)
         new Bldg(22, 6, 38, 14, new Opening('N', 30, 2, "door-med"), new Opening('W', 10, 8, null),
                 new Opening('N', 22, 0.4, null), new Opening('S', 22, 0.4, null)),
         // 별관 복도(동쪽 벽만 남는다)
