@@ -22,6 +22,9 @@ import java.util.List;
  *              로스터와 같은 규약 — 바뀔 때와 입장 시에만 포함.
  *   patrolRemainMs: 그 상태가 끝나기까지 남은 시간. 카운트다운은 클라가 자체 진행한다.
  *   patrolCaughtId: 이번 순찰에서 걸린 사람의 id. 아무도 안 걸렸으면 null.
+ *   guards:    순찰 간수들의 위치·방향·시야. <b>순찰이 도는 동안 매 tick</b> 실린다(그 밖에는 null).
+ *              간수는 움직이므로 patrol 필드처럼 "바뀔 때만"이 아니라 states와 같은 핫패스다.
+ *              적발 판정이 이 시야로 결정되니, 클라는 이걸 그려서 규칙을 눈에 보이게 해야 한다.
  *   assist:    협동 구제 개방(남의 감방 자물쇠를 대신 풀 수 있는 상태). 개인 탈출이 오래 걸리면
  *              열린다. 로스터와 같은 규약 — 열리는 순간·입장 시에만 true, 그 외 null → 생략.
  *
@@ -46,5 +49,6 @@ public record WorldSnapshot(
         Long patrolRemainMs,
         String patrolCaughtId,
         List<ReimprisonEvent> reimprisons,
-        Boolean assist
+        Boolean assist,
+        List<GuardTick> guards
 ) {}

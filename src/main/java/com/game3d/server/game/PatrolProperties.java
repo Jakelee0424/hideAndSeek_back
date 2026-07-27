@@ -30,6 +30,17 @@ public record PatrolProperties(
         Duration penalty,
         /** 이 크기를 넘는 이동 의도를 "움직였다"로 본다. 부동소수 찌꺼기를 걸러내는 값. */
         double moveEpsilon,
+        /** 도는 간수 수. 복도 양끝에서 서로를 향해 출발한다(홀수면 서쪽이 하나 더). */
+        int guardCount,
+        /**
+         * 간수 걷는 속도(m/s). 플레이어(game.speed)보다 느려야 한다 —
+         * 더 빠르면 시야에서 벗어날 방법이 숨는 것밖에 없어진다.
+         */
+        double guardSpeed,
+        /** 시야 거리(m). 이보다 멀면 무슨 짓을 해도 안 걸린다. */
+        double viewRange,
+        /** 시야각(도, 부채꼴 전체 폭). 진행 방향 기준으로 좌우 절반씩 퍼진다. */
+        double viewFovDeg,
         /**
          * 봇이 순찰 중에 실수할 확률(0~1). 순찰마다 새로 뽑는다.
          *

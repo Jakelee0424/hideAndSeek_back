@@ -65,7 +65,6 @@ final class BotNav {
     private static final int[][] ADJ = buildAdjacency();
 
     /** 시야 판정 표본 간격(m). 촘촘할수록 정확하지만 tick 비용이 는다. */
-    private static final double LOS_STEP = 0.5;
 
     private BotNav() {}
 
@@ -75,7 +74,7 @@ final class BotNav {
      * (길찾기 도입 전과 같은 동작 — 최소한 나빠지지는 않는다).
      */
     static double[] steerPoint(double x, double z, double tx, double tz) {
-        if (lineClear(x, z, tx, tz)) {
+        if (Collision.lineClear(x, z, tx, tz)) {
             return new double[] {tx, tz};
         }
         int start = nearestNode(x, z);
@@ -88,7 +87,7 @@ final class BotNav {
         // 없으면 경로의 첫 노드로 간다(항상 보이도록 nearestNode가 시야를 우선한다).
         for (int i = path.length - 1; i >= 0; i--) {
             Node n = NODES[path[i]];
-            if (lineClear(x, z, n.x(), n.z())) {
+            if (Collision.lineClear(x, z, n.x(), n.z())) {
                 return new double[] {n.x(), n.z()};
             }
         }
@@ -110,7 +109,7 @@ final class BotNav {
                 anyD2 = d2;
                 any = i;
             }
-            if (d2 < visibleD2 && lineClear(x, z, NODES[i].x(), NODES[i].z())) {
+            if (d2 < visibleD2 && Collision.lineClear(x, z, NODES[i].x(), NODES[i].z())) {
                 visibleD2 = d2;
                 visible = i;
             }
@@ -162,20 +161,6 @@ final class BotNav {
         return path;
     }
 
-    /** 두 점을 잇는 선이 통행 가능한가. 표본을 찍어 벽에 걸리는지 본다(문은 무시 — 위 설명 참고). */
-    private static boolean lineClear(double x1, double z1, double x2, double z2) {
-        double dx = x2 - x1;
-        double dz = z2 - z1;
-        double len = Math.hypot(dx, dz);
-        int steps = (int) Math.ceil(len / LOS_STEP);
-        for (int i = 1; i <= steps; i++) {
-            double t = (double) i / steps;
-            if (Collision.blockedByWall(x1 + dx * t, z1 + dz * t)) {
-                return false;
-            }
-        }
-        return true;
-    }
 
     private static int[][] buildAdjacency() {
         List<List<Integer>> lists = new ArrayList<>(NODES.length);

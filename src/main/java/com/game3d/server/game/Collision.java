@@ -307,6 +307,32 @@ final class Collision {
         return Math.abs(p[0] - x) > 1e-9 || Math.abs(p[1] - z) > 1e-9;
     }
 
+    /** 직선 시야 판정의 표본 간격(m). */
+    private static final double LOS_STEP = 0.5;
+
+    /**
+     * 두 점을 잇는 직선이 뚫려 있는가. 표본을 찍어 {@link #blockedByWall}에 걸리는지 본다.
+     *
+     * 문은 장애물로 세지 않는다 — 열린 문틈으로 보이는 게 맞고, 닫힌 문까지 벽으로 세면
+     * 문 좌표가 통행 불가가 되어 봇 길찾기가 무너진다({@link BotNav} 주석 참고).
+     *
+     * <p>봇 길찾기({@link BotNav})와 순찰 간수 시야({@link Patrol})가 함께 쓴다 —
+     * 같은 판정을 두 벌 두면 한쪽만 고쳐져 어긋난다.
+     */
+    static boolean lineClear(double x1, double z1, double x2, double z2) {
+        double dx = x2 - x1;
+        double dz = z2 - z1;
+        double len = Math.hypot(dx, dz);
+        int steps = (int) Math.ceil(len / LOS_STEP);
+        for (int i = 1; i <= steps; i++) {
+            double t = (double) i / steps;
+            if (blockedByWall(x1 + dx * t, z1 + dz * t)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * (x,z)에서 range 안에 있는 <b>닫힌</b> 문 중 최근접의 id. 없으면 null.
      * 봇이 스스로 문을 열 때 쓴다(사거리도 프론트 DOOR_RANGE와 같은 값).

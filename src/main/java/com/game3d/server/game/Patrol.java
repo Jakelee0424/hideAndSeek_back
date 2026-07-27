@@ -1,5 +1,8 @@
 package com.game3d.server.game;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -24,9 +27,50 @@ class Patrol {
         NONE,
         /** 곧 온다 — 멈출 준비를 하는 시간. 이때는 움직여도 걸리지 않는다. */
         WARNING,
-        /** 순찰 중. 움직이거나 건드리면 걸린다. */
+        /** 순찰 중. <b>간수 시야 안에서</b> 움직이거나 건드리면 걸린다. */
         ACTIVE
     }
+
+    // ── 순찰 간수 ────────────────────────────────────────────────────
+    // 예전엔 순찰이 도는 동안 맵 어디에 있든 움직이면 걸렸다("전체 맵 감지"). 지금은 간수가
+    // 실제로 복도를 걷고, 그 부채꼴 시야 안에서 움직여야만 걸린다 — 시야 밖이면 뛰어도 안전하다.
+    // 적발 트리거(이동·점프·상호작용)는 그대로다. 바뀐 건 범위뿐이다.
+
+    /**
+     * 간수가 도는 노선: 수감동~별관을 잇는 중앙 복도(z=17)를 왕복한다.
+     * 감방 문(z=20/14)과 별관 방 문이 전부 이 복도로 열려 있어 플레이어 동선과 정면으로 부딪힌다.
+     * 복도 정중앙이라 벽·소품에 걸리지 않아 길찾기 없이 직선 왕복으로 충분하다.
+     */
+    private static final double ROUTE_Z = 17.0;
+    private static final double ROUTE_X_MIN = -36.0;
+    private static final double ROUTE_X_MAX = 36.0;
+
+    /**
+     * 순찰 간수 하나. 복도를 왕복하며 진행 방향으로 부채꼴 시야를 갖는다.
+     *
+     * <p>좌표는 루프 스레드가 쓰고 컨트롤러 스레드가 읽는다({@link Room#solveByPlayer}가
+     * 시야를 물어본다) — 그래서 volatile이다.
+     */
+    static final class Guard {
+        volatile double x;
+        final double z;
+        /** 바라보는(=걷는) 방향. +1 동쪽, -1 서쪽. */
+        volatile double dir;
+
+        Guard(double x, double z, double dir) {
+            this.x = x;
+            this.z = z;
+            this.dir = dir;
+        }
+
+        /** 프론트 규약(+z가 rot 0)에 맞춘 y축 회전. */
+        double rot() {
+            return Math.atan2(dir, 0);
+        }
+    }
+
+    /** 순찰 중일 때만 채워진다. 회차가 끝나면 비운다. */
+    private final List<Guard> guards = new CopyOnWriteArrayList<>();
 
     /** 순찰이 첫 단계(소등)가 끝난 뒤 이만큼 지나서부터 돌기 시작한다. */
     private static final long LEAD_MS = 20_000;
@@ -124,7 +168,83 @@ class Patrol {
         }
         state = nextState;
         index = nextIndex;
+
+        // 간수는 순찰이 도는 동안만 존재한다. ACTIVE에 들어설 때 복도 양끝에 세우고,
+        // 끝나면 치운다(예고 중에는 아직 안 보인다 — 예고는 "곧 온다"는 소리일 뿐이다).
+        if (state == State.ACTIVE) {
+            if (guards.isEmpty()) {
+                spawnGuards();
+            }
+        } else {
+            guards.clear();
+        }
         return true;
+    }
+
+    /** 복도 양끝에서 서로를 향해 출발시킨다. 홀수면 서쪽에서 출발하는 쪽이 하나 더 많다. */
+    private void spawnGuards() {
+        List<Guard> fresh = new ArrayList<>();
+        int count = Math.max(1, props.guardCount());
+        for (int i = 0; i < count; i++) {
+            boolean eastbound = i % 2 == 0;
+            fresh.add(eastbound
+                    ? new Guard(ROUTE_X_MIN, ROUTE_Z, 1)
+                    : new Guard(ROUTE_X_MAX, ROUTE_Z, -1));
+        }
+        guards.addAll(fresh);
+    }
+
+    /** 간수를 노선 위에서 dt초만큼 걷게 한다. 끝에 닿으면 돌아선다. */
+    void moveGuards(double dtSeconds) {
+        double step = props.guardSpeed() * dtSeconds;
+        for (Guard g : guards) {
+            double nx = g.x + g.dir * step;
+            if (nx > ROUTE_X_MAX) {
+                nx = ROUTE_X_MAX;
+                g.dir = -1;
+            } else if (nx < ROUTE_X_MIN) {
+                nx = ROUTE_X_MIN;
+                g.dir = 1;
+            }
+            g.x = nx;
+        }
+    }
+
+    List<Guard> guards() {
+        return guards;
+    }
+
+    /**
+     * 이 지점이 간수 하나라도의 시야에 들어 있는가.
+     *
+     * 거리 → 시야각 → 벽 순으로 거른다(뒤로 갈수록 비싸다). 벽 판정은
+     * {@link Collision#lineClear}라 소품도 시야를 가린다 — 침대·작업대 뒤에 붙으면 안 보인다.
+     *
+     * <p>루프 스레드와 컨트롤러 스레드 양쪽에서 불린다. 간수 좌표가 volatile이라
+     * 한 tick 어긋난 값을 읽을 수는 있어도(1/20초) 찢어진 값을 읽지는 않는다.
+     */
+    boolean sees(double px, double pz) {
+        if (state != State.ACTIVE) {
+            return false;
+        }
+        double range = props.viewRange();
+        double cosHalfFov = Math.cos(Math.toRadians(props.viewFovDeg()) / 2);
+        for (Guard g : guards) {
+            double dx = px - g.x;
+            double dz = pz - g.z;
+            double dist = Math.hypot(dx, dz);
+            if (dist > range) {
+                continue;
+            }
+            // 코앞은 각도를 따지지 않는다(등 뒤 30cm까지 통과시키면 어이없어 보인다).
+            if (dist > 0.5 && (dx * g.dir) / dist < cosHalfFov) {
+                continue;
+            }
+            if (Collision.lineClear(g.x, g.z, px, pz)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     State state() {

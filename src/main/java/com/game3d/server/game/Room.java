@@ -1,6 +1,7 @@
 package com.game3d.server.game;
 
 import com.game3d.server.dto.ChatEvent;
+import com.game3d.server.dto.GuardTick;
 import com.game3d.server.dto.PlayerTick;
 import com.game3d.server.dto.PunchEvent;
 import com.game3d.server.dto.ReimprisonEvent;
@@ -760,6 +761,9 @@ public class Room {
             log.info("방 {} 순찰 {}", roomId, patrol.state());
         }
         boolean patrolling = patrol.active();
+        if (patrolling) {
+            patrol.moveGuards(props.tickSeconds());
+        }
 
         double dt = props.tickSeconds();
         double speed = props.speed();
@@ -767,6 +771,10 @@ public class Room {
         double kbDecay = Math.exp(-dt / KNOCKBACK_TAU);
 
         for (Player p : players.values()) {
+            // 간수 시야 판정. 이번 tick 이동 **전** 위치로 본다 — 1/20초 차이는 눈에 띄지 않고,
+            // 이동을 다 적분한 뒤 판정하려면 루프를 두 번 돌아야 한다.
+            boolean watched = patrolling && patrol.sees(p.x, p.z);
+
             double mx;
             double mz;
             boolean sprint = false;
@@ -776,9 +784,11 @@ public class Room {
                 double[] mv = p.brain.steer(p, players.values(), solvedIds, unreachableFor(p), nowMs);
                 mx = mv[0];
                 mz = mv[1];
-                // 순찰 중에는 봇도 멈춘다. 다만 가끔은 실수한다(botSlipChance) — 스크립트라
-                // 늘 완벽히 멈추면 "한 번도 안 걸린 놈 = AI"가 되어 마지막 투표가 무의미해진다.
-                if (patrolling && !patrol.botSlipsNow()) {
+                // 봇도 간수와 눈이 마주치면 멈춘다. 예전엔 순찰 내내 굳어 있었는데, 이제
+                // 시야에 들 때만 멈추므로 순찰 중에도 자연스럽게 돌아다닌다.
+                // 가끔은 실수한다(botSlipChance) — 스크립트라 늘 완벽히 멈추면
+                // "한 번도 안 걸린 놈 = AI"가 되어 마지막 투표가 무의미해진다.
+                if (watched && !patrol.botSlipsNow()) {
                     mx = 0;
                     mz = 0;
                 }
@@ -790,7 +800,9 @@ public class Room {
 
             // 수상한 움직임 판정. 조작을 막지는 않는다 — 움직였다는 사실만 본다.
             // 시점 회전(rotationY)은 세지 않는다. 고개를 돌리는 것까지 걸면 너무 가혹하다.
-            if (patrolling && (isMoving(mx, mz) || (!p.bot && p.inputJump(nowMs, timeout)))) {
+            // ⚠️ 걸리는 조건은 "순찰 중"이 아니라 "간수가 지금 나를 보고 있다"이다.
+            //    시야 밖이면 순찰 중에도 뛰어다닐 수 있다.
+            if (watched && (isMoving(mx, mz) || (!p.bot && p.inputJump(nowMs, timeout)))) {
                 catchSuspicious(p, "이동");
             }
 
@@ -1052,13 +1064,14 @@ public class Room {
     }
 
     /**
-     * 사람이 퍼즐을 풀었다. 순찰 중이었다면 그 행동 자체가 적발 사유다.
+     * 사람이 퍼즐을 풀었다. <b>간수가 보고 있었다면</b> 그 행동 자체가 적발 사유다.
      *
      * 푸는 것 자체를 막지는 않는다 — 멈출지 말지는 플레이어가 정한다는 게 이 장치의 규칙이다.
+     * (예전엔 순찰 중이기만 하면 어디서 풀든 걸렸다. 지금은 간수 시야 안에서만 걸린다.)
      */
     public void solveByPlayer(String playerId, String objectId) {
         Player p = playerId == null ? null : players.get(playerId);
-        if (p != null && patrol.active()) {
+        if (p != null && patrol.sees(p.x, p.z)) {
             catchSuspicious(p, "상호작용");
         }
         markSolved(objectId);
@@ -1243,8 +1256,23 @@ public class Room {
             patrolCaughtId = patrol.caughtId();
         }
 
+        // 간수는 움직이므로 dirty 규약을 쓸 수 없다 — 순찰이 도는 동안 매 tick 싣는다.
+        // (그 밖에는 null이라 NON_NULL로 통째로 빠진다.)
+        List<GuardTick> guards = null;
+        if (patrol.active()) {
+            guards = new ArrayList<>();
+            for (Patrol.Guard g : patrol.guards()) {
+                // 좌표는 PlayerTick과 같이 소수 2자리로 줄인다(20Hz 핫패스).
+                guards.add(new GuardTick(
+                        Math.round(g.x * 100.0) / 100.0,
+                        Math.round(g.z * 100.0) / 100.0,
+                        Math.round(g.rot() * 1000.0) / 1000.0,
+                        patrolProps.viewRange(), patrolProps.viewFovDeg()));
+            }
+        }
+
         return new WorldSnapshot(tick, states, roster, new ArrayList<>(solvedIds),
                 new ArrayList<>(openDoors), phase, phaseRemainMs, voteList, aiId, readyIds,
-                punches, patrolState, patrolRemainMs, patrolCaughtId, reimprisons, assist);
+                punches, patrolState, patrolRemainMs, patrolCaughtId, reimprisons, assist, guards);
     }
 }
