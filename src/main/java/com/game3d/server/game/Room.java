@@ -113,6 +113,7 @@ public class Room {
         // (작업장은 문 자물쇠를 없애고 상시 개방으로 바꿨다 — 방 안 퀴즈로 표식을 해금한다.)
         "lock-med", "door-med",         // 의무실
         "lock-laundry", "door-laundry", // 세탁실
+        "lock-cafe", "door-cafe",       // 식당(요일 코드로 입장)
         // 정문 자물쇠 → 남벽 정문. 풀면 정문이 열리지만 그게 곧 함정이다(markSolved에서 발동 신호).
         // containsValue 검사로 봇·/door 요청이 정문을 함부로 열지 못하게도 막는다.
         "gate-lock", "gate-main",

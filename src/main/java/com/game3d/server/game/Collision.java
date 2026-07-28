@@ -69,9 +69,12 @@ final class Collision {
         new Obst(-20.6, 10, 0.5, 1.55, -1, 3), new Obst(-7.3, 7.3, 0.4, 0.4, -1, 3),     // 1-4
         // 화장실: 변기·칸막이 열(북벽) + 세면대(서벽)
         new Obst(0, 26.8, 4.3, 0.55, -1, 3), new Obst(-5.4, 22.5, 0.35, 1.5, -1, 3),
-        // 식당: 식탁+벤치 2조 + 배식대(북벽)
-        new Obst(10, 23.5, 1.6, 1.15, -1, 3), new Obst(18, 23.5, 1.6, 1.15, -1, 3),
-        new Obst(14, 27.2, 5, 0.5, -1, 3),
+        // 식당: 좌측 냉장고 + 긴 배식대(북벽) + 식탁 6개(2열×3행, 뚫고 못 지나가게 충돌).
+        new Obst(7.2, 27.3, 0.6, 0.45, -1, 3),
+        new Obst(14.95, 27.3, 6.25, 0.45, -1, 3),
+        new Obst(9.5, 21.4, 1.0, 0.45, -1, 3), new Obst(18.5, 21.4, 1.0, 0.45, -1, 3),
+        new Obst(9.5, 23.4, 1.0, 0.45, -1, 3), new Obst(18.5, 23.4, 1.0, 0.45, -1, 3),
+        new Obst(9.5, 25.4, 1.0, 0.45, -1, 3), new Obst(18.5, 25.4, 1.0, 0.45, -1, 3),
         // 세탁실: 세탁기 4대(북벽) + 카트(동남쪽 구석 — 문(x30) 정면 동선을 비운다)
         new Obst(25, 26.8, 0.8, 0.9, -1, 3), new Obst(28.2, 26.8, 0.8, 0.9, -1, 3),
         new Obst(31.4, 26.8, 0.8, 0.9, -1, 3), new Obst(34.6, 26.8, 0.8, 0.9, -1, 3),
@@ -142,7 +145,7 @@ final class Collision {
                 new Opening('N', -6, 0.4, null), new Opening('N', 6, 0.4, null),
                 new Opening('S', -6, 0.4, null), new Opening('S', 0, 2, null), new Opening('S', 6, 0.4, null)),
         // 별관(북동). 문은 모두 가운데 복도로.
-        new Bldg(6, 20, 22, 28, new Opening('S', 14, 4, null)),              // 식당(개방)
+        new Bldg(6, 20, 22, 28, new Opening('S', 14, 4, "door-cafe")),       // 식당(요일 코드 lock-cafe로 입장)
         new Bldg(22, 20, 38, 28, new Opening('S', 30, 2, "door-laundry"), new Opening('W', 24, 8, null),
                 new Opening('N', 22, 0.4, null), new Opening('S', 22, 0.4, null)),
         new Bldg(6, 6, 22, 14, new Opening('N', 14, 2, null)),               // 작업장(문 상시 개방 — 방 안 퀴즈로 표식 해금)
