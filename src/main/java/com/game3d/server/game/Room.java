@@ -110,10 +110,10 @@ public class Room {
         "lock-C", "cell-C",
         "lock-D", "cell-D",
         // 별관 복도 옆방(프론트 interactables.ts). 풀면 그 방 문이 열린다.
-        // (작업장은 문 자물쇠를 없애고 상시 개방으로 바꿨다 — 방 안 퀴즈로 표식을 해금한다.)
         "lock-med", "door-med",         // 의무실
         "lock-laundry", "door-laundry", // 세탁실
         "lock-cafe", "door-cafe",       // 식당(요일 코드로 입장)
+        "lock-work", "door-work",       // 작업장(볼트-너트 짝맞추기로 입장 → 방 안 퀴즈로 표식 해금)
         // 정문 자물쇠 → 남벽 정문. 풀면 정문이 열리지만 그게 곧 함정이다(markSolved에서 발동 신호).
         // containsValue 검사로 봇·/door 요청이 정문을 함부로 열지 못하게도 막는다.
         "gate-lock", "gate-main",
@@ -121,6 +121,12 @@ public class Room {
         // 해치를 함부로 열지 못하게 막는 잠금(containsValue 검사)이기도 하다.
         "escape-pipe", "pipe-hatch"
     );
+
+    /** 배수관 샛길 철창(표식 게이트) 문 id. 프론트 interactables.DRAIN_GATE_ID / Collision "gate-drain"과 같다. */
+    private static final String DRAIN_GATE_DOOR = "gate-drain";
+    /** 이 표식 퀴즈들이 전부 solved면(표식 4개) 위 철창이 열린다. 프론트 interactables.STAMP_QUIZ_IDS와 같다. */
+    private static final java.util.List<String> STAMP_QUIZ_IDS =
+        java.util.List.of("quiz-work", "lock-fridge", "quiz-med", "quiz-laundry");
 
     // ── 펀치(약한 넉백) ────────────────────────────────────────────────────────
     // 아래 넷 중 KNOCKBACK_SPEED/KNOCKBACK_TAU는 프론트 punchConfig.ts와 이중 관리다. victim <b>본인</b>
@@ -1107,6 +1113,12 @@ public class Room {
                         + ThreadLocalRandom.current().nextLong(BOT_CLUE_JITTER_MS);
             }
         }
+        // 표식 게이트: 별관 4방 표식 퀴즈를 모두 풀면(표식 4개 획득) 배수관 샛길 철창이 열린다.
+        // 단일 자물쇠→문이 아니라 4개 합이라 LOCK_OPENS가 아닌 여기서 직접 판정한다.
+        // (지금은 작업장·식당만 구현 — quiz-med·quiz-laundry가 추가되면 그때 4개가 채워져 열린다.)
+        if (STAMP_QUIZ_IDS.stream().allMatch(solvedIds::contains) && openDoors.add(DRAIN_GATE_DOOR)) {
+            log.info("방 {} 표식 4개 완성 → 배수관 샛길 철창 {} 열림", roomId, DRAIN_GATE_DOOR);
+        }
     }
 
     /** 봇 감방의 자물쇠 id("lock-A"…). 봇이 없거나 감방 배정 전이면 null. */
@@ -1124,7 +1136,9 @@ public class Room {
      * 겸사겸사 퍼즐을 건너뛰고 door만 쏘아 여는 길도 막힌다.
      */
     public void toggleDoor(String doorId) {
-        if (doorId == null || doorId.isBlank() || LOCK_OPENS.containsValue(doorId)) {
+        // 표식 게이트(gate-drain)도 /door로 못 열게 막는다 — 오직 표식 4개(markSolved)로만 열린다.
+        if (doorId == null || doorId.isBlank() || LOCK_OPENS.containsValue(doorId)
+                || DRAIN_GATE_DOOR.equals(doorId)) {
             return;
         }
         if (!openDoors.remove(doorId)) {
