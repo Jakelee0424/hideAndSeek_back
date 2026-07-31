@@ -54,13 +54,13 @@ public class Room {
     private static final long ESCAPE_TO_VOTE_DELAY_MS = 5_200;
 
     /**
-     * 개인 감방 탈출(MISSION)이 이 시간을 넘기면 다른 사람이 대신 자물쇠를 풀어 줄 수 있다(협동 구제).
+     * 개인 감방 탈출이 이 시간을 넘기면 다른 사람이 대신 자물쇠를 풀어 줄 수 있다(협동 구제).
      *
      * 전원이 같은 시각(게임 시작)에 갇히고 각자 자기 방 미니게임을 풀어야 하는데, 손이 막힌
-     * 사람이 혼자 오래 갇혀 방 전체가 못 나아가는 걸 막으려는 것이다. MISSION 시작부터 잰다 —
-     * 그때까지 안 풀린 감방이 곧 "5분 넘게 갇힌 사람"이다. 열리면 복도에서 창살 너머로 그 방
-     * 자물쇠를 만질 수 있게 되고(프론트 canInteract), 대신 풀면 그 방 문이 열린다.
-     * 테스트 방은 미션이 60초라 정식 5분이면 절대 못 보므로 짧게(20초) 잡는다.
+     * 사람이 혼자 오래 갇혀 방 전체가 못 나아가는 걸 막으려는 것이다. 플레이(PLAY) 시작부터
+     * 잰다 — 그때까지 안 풀린 감방이 곧 "5분 넘게 갇힌 사람"이다. 열리면 복도에서 창살 너머로
+     * 그 방 자물쇠를 만질 수 있게 되고(프론트 canInteract), 대신 풀면 그 방 문이 열린다.
+     * 테스트 방은 플레이가 90초라 정식 5분이면 절대 못 보므로 짧게(20초) 잡는다.
      */
     private static final long ASSIST_AFTER_MS = 5 * 60_000L;
     private static final long ASSIST_AFTER_MS_TEST = 20_000L;
@@ -215,12 +215,12 @@ public class Room {
     // markSolved(컨트롤러/루프)에서 예약하고 tick(루프)에서 소비한다.
     private volatile long botClueSayAtMs;
 
-    // 감방 탈출(MISSION)이 시작된 시각(ms). 0이면 아직 MISSION 전. 협동 구제 개방의 기준점.
+    // 플레이(PLAY)가 시작된 시각(ms). 0이면 아직 대기 중. 협동 구제 개방의 기준점.
     // tick(루프 스레드)에서만 쓰고 읽는다.
-    private volatile long missionStartedAtMs;
+    private volatile long playStartedAtMs;
 
     // 협동 구제(남의 감방 자물쇠 대신 풀기) 개방 여부. 한 번 열리면 유지된다.
-    // MISSION 시작 후 ASSIST_AFTER_MS가 지나면 tick이 연다. 로스터와 같은 규약으로 바뀔 때·
+    // PLAY 시작 후 ASSIST_AFTER_MS가 지나면 tick이 연다. 로스터와 같은 규약으로 바뀔 때·
     // 입장 시에만 스냅샷에 싣는다(중간 입장자도 이미 열렸음을 알아야 한다).
     private volatile boolean assistOpen;
     private final AtomicBoolean assistDirty = new AtomicBoolean();
@@ -721,21 +721,23 @@ public class Room {
             log.info("방 {} 단계 전환 → {}", roomId, phases.phase());
         }
 
-        // 개인 감방 탈출(MISSION)이 오래 걸리면 다른 사람이 대신 풀어 줄 수 있게 연다(협동 구제).
-        // 전원이 같은 시각(게임 시작)에 갇히므로 MISSION 시작부터 재는 창 하나면 충분하다 —
+        // 개인 감방 탈출이 오래 걸리면 다른 사람이 대신 풀어 줄 수 있게 연다(협동 구제).
+        // 전원이 같은 시각(게임 시작)에 갇히므로 PLAY 시작부터 재는 창 하나면 충분하다 —
         // 그 시점까지 안 풀린 감방이 곧 "오래 갇힌 사람"이다.
-        if (missionStartedAtMs == 0 && phases.phase() == GamePhase.MISSION) {
-            missionStartedAtMs = nowMs;
+        // ⚠️ 옛 MISSION 시작(=소등 2분 뒤)이 아니라 이제 게임 시작 그 자체다. 도입 내레이션이
+        //    PLAY 안으로 들어왔으므로, 정식 방의 구제 개방이 옛 7분 시점에서 5분으로 당겨졌다.
+        if (playStartedAtMs == 0 && phases.phase() == GamePhase.PLAY) {
+            playStartedAtMs = nowMs;
         }
-        if (!assistOpen && missionStartedAtMs != 0
-                && nowMs - missionStartedAtMs >= assistAfterMs) {
+        if (!assistOpen && playStartedAtMs != 0
+                && nowMs - playStartedAtMs >= assistAfterMs) {
             assistOpen = true;
             assistDirty.set(true);
             log.info("방 {} 개인 탈출 {}s 경과 → 협동 구제 개방(남의 감방 자물쇠 대신 풀기 허용)",
                     roomId, assistAfterMs / 1000);
         }
 
-        // 전원이 탈옥문을 열면(협동 오브젝트라 열리는 순간이 곧 팀 탈출 완료) 남은 MISSION/SHARING
+        // 전원이 탈옥문을 열면(협동 오브젝트라 열리는 순간이 곧 팀 탈출 완료) 남은 플레이(PLAY)
         // 타이머와 무관하게 잠깐의 탈출 연출 뒤 색출(VOTE)로 넘어간다. 안 그러면 서버는 탈출을
         // 모른 채 방을 세워 두고, 플레이어는 투표 화면으로 못 넘어가 대기 상태로 남는다.
         long escapedAt = escapeCompletedAtMs;
@@ -759,10 +761,10 @@ public class Room {
         resolvePunches(nowMs);
 
         // 순찰 시계는 페널티를 뺀 실제 경과를 본다(PhaseTimeline.rawElapsedMs 주석 참고).
-        // 도는 구간은 감방 탈출·단서 공유뿐 — 그 밖에서는 무조건 NONE이라 자정이 크게
-        // 당겨져 단계를 건너뛰어도 순찰이 남아 돌지 않는다.
+        // 도는 구간은 플레이(PLAY)뿐 — 그 밖에서는 무조건 NONE이라 자정이 크게 당겨져
+        // 단계를 건너뛰어도 순찰이 남아 돌지 않는다. (앞머리 내레이션 구간은 Patrol이 뺀다.)
         GamePhase now = phases.phase();
-        boolean patrolWindow = now == GamePhase.MISSION || now == GamePhase.SHARING;
+        boolean patrolWindow = now == GamePhase.PLAY;
         if (patrol.advance(phases.rawElapsedMs(nowMs), patrolWindow)) {
             patrolDirty.set(true);
             log.info("방 {} 순찰 {}", roomId, patrol.state());

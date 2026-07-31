@@ -72,9 +72,9 @@ class Patrol {
     /** 순찰 중일 때만 채워진다. 회차가 끝나면 비운다. */
     private final List<Guard> guards = new CopyOnWriteArrayList<>();
 
-    /** 순찰이 첫 단계(소등)가 끝난 뒤 이만큼 지나서부터 돌기 시작한다. */
+    /** 순찰이 도입 내레이션이 끝난 뒤 이만큼 더 지나서부터 돌기 시작한다. */
     private static final long LEAD_MS = 20_000;
-    /** 마지막 순찰이 끝나고 이만큼은 남겨 둔다(공유 단계 끝에 붙어 터지지 않게). */
+    /** 마지막 순찰이 끝나고 이만큼은 남겨 둔다(플레이 끝에 붙어 색출로 넘어가며 터지지 않게). */
     private static final long TAIL_MS = 20_000;
 
     private final PatrolProperties props;
@@ -96,12 +96,11 @@ class Patrol {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
         int count = props.enabled() ? props.pickCount(rnd) : 0;
 
-        // 순찰이 도는 구간: 감방 탈출(MISSION) + 단서 공유(SHARING).
-        // 소등은 규칙을 읽는 시간이고, 색출은 투표창이 떠 있어 움직임에 의미가 없다.
-        long windowStart = phaseProps.durationMs(GamePhase.ONBOARDING) + LEAD_MS;
-        long windowEnd = phaseProps.durationMs(GamePhase.ONBOARDING)
-                + phaseProps.durationMs(GamePhase.MISSION)
-                + phaseProps.durationMs(GamePhase.SHARING) - TAIL_MS;
+        // 순찰이 도는 구간: 플레이(PLAY) 전체. 색출은 투표창이 떠 있어 움직임에 의미가 없다.
+        // 앞머리는 도입 내레이션(intro)만큼 비운다 — 읽는 동안 간수가 지나가면 손도 못 댄 채
+        // 걸린다. 옛 ONBOARDING 단계 길이가 하던 역할을 그 값이 그대로 이어받은 것이다.
+        long windowStart = phaseProps.introMs() + LEAD_MS;
+        long windowEnd = phaseProps.durationMs(GamePhase.PLAY) - TAIL_MS;
 
         long span = windowEnd - windowStart;
         if (count <= 0 || span <= 0) {

@@ -39,10 +39,9 @@ public class RoomManager {
         log.info("AI 봇 느린 층: {}", on
                 ? String.join(" / ", cfg.models()) + " 라운드로빈 (" + cfg.intervalMs() + "ms 주기)"
                 : "스크립트 전용");
-        log.info("진행 단계: 온보딩 {}s → 미션 {}s → 공유 {}s → 투표 {}s (총 {}분)",
-                phaseProps.onboarding().toSeconds(), phaseProps.mission().toSeconds(),
-                phaseProps.sharing().toSeconds(), phaseProps.vote().toSeconds(),
-                phaseProps.totalMs() / 60_000);
+        log.info("진행 단계: 탈옥 {}s(도입 내레이션 {}s 포함) → 색출 {}s (총 {}분)",
+                phaseProps.play().toSeconds(), phaseProps.intro().toSeconds(),
+                phaseProps.vote().toSeconds(), phaseProps.totalMs() / 60_000);
     }
 
     /**
@@ -50,10 +49,9 @@ public class RoomManager {
      * 정식 20분을 다 기다리면 투표 화면을 볼 수가 없다.
      */
     private static final PhaseProperties TEST_PHASES = new PhaseProperties(
-            Duration.ofSeconds(15),  // 온보딩
-            Duration.ofSeconds(60),  // 개별 미션
-            Duration.ofSeconds(15),  // 정보 공유
-            Duration.ofSeconds(45)   // AI 투표
+            Duration.ofSeconds(15),  // 도입 내레이션(단계가 아니라 PLAY 앞부분에 겹친다)
+            Duration.ofSeconds(90),  // 플레이 — 옛 온보딩15+미션60+공유15와 같은 총량이다
+            Duration.ofSeconds(45)   // 색출
     );
 
     /**
