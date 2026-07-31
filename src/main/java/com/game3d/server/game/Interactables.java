@@ -46,7 +46,11 @@ final class Interactables {
             // (해독 조각 문서 doc-cafe/hall/yard는 옛 "표식+수 셈법" 시스템과 함께 없앴다.)
             // 2026-07-27: 쪽지가 전부 별관 복도 두 줄에 제 자물쇠 4.5m 안으로 몰려 있어
             // 탐색·공유가 안 일어났다. 네 구역으로 흩었다(프론트 interactables.ts와 같은 좌표).
-            new Poi("note-med1", 10.5, 22, false, false, "약장 라벨(식당)"),
+            // ⚠️ note-med1은 프론트가 (3, 22) 화장실 쪽 개방 구역으로 옮겼는데 여기가 옛 좌표
+            //    (10.5, 22)로 남아 있었다 — 지금 그 자리는 **요일 코드로 잠긴 식당 안**이라,
+            //    봇이 못 여는 문 앞으로 걸어가 멈추는 그 함정(escape-pipe 때와 같은 종류)이었다.
+            //    2026-07-31 프론트 좌표로 맞췄다.
+            new Poi("note-med1", 3, 22, false, false, "약장 라벨(화장실)"),
             new Poi("note-laundry1", 2, 24.5, false, false, "세탁 안내문(화장실)"),
             new Poi("note-laundry2", 24, -10, false, false, "젖은 쪽지(연병장 동편)"),
             new Poi("note-med2", -24, -18, false, false, "처방 기록(연병장 서편)"),
