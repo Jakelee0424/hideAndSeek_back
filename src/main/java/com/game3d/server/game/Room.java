@@ -1115,7 +1115,7 @@ public class Room {
         }
         // 표식 게이트: 별관 4방 표식 퀴즈를 모두 풀면(표식 4개 획득) 배수관 샛길 철창이 열린다.
         // 단일 자물쇠→문이 아니라 4개 합이라 LOCK_OPENS가 아닌 여기서 직접 판정한다.
-        // (지금은 작업장·식당만 구현 — quiz-med·quiz-laundry가 추가되면 그때 4개가 채워져 열린다.)
+        // (지금은 작업장·식당·세탁실까지 구현 — quiz-med가 추가되면 그때 4개가 채워져 열린다.)
         if (STAMP_QUIZ_IDS.stream().allMatch(solvedIds::contains) && openDoors.add(DRAIN_GATE_DOOR)) {
             log.info("방 {} 표식 4개 완성 → 배수관 샛길 철창 {} 열림", roomId, DRAIN_GATE_DOOR);
         }
