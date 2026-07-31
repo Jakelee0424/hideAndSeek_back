@@ -93,10 +93,6 @@ public class Room {
      */
     private static final long BOT_FOLLOW_DELAY_MS = 10_000;
 
-    /** 봇이 감방을 나온 뒤 자기 단서를 말하기까지의 지연(+지터). 나오자마자 말하면 스크립트 티가 난다. */
-    private static final long BOT_CLUE_DELAY_MS = 18_000;
-    private static final long BOT_CLUE_JITTER_MS = 12_000;
-
     /**
      * 감방 자물쇠 id → 풀면 열리는 감방문 id. 프론트 interactables.ts의 lockbox.opensDoor 와 같다.
      *
@@ -208,12 +204,6 @@ public class Room {
     // 배수관(escape-pipe)이 풀린 시각(ms). 0이면 아직 안 열렸다. 색출(VOTE) 조기 전환의 기준점.
     // markSolved(컨트롤러 스레드 사람 solve / 루프 스레드 봇)에서 쓰고 tick(루프 스레드)에서 읽는다.
     private volatile long escapeCompletedAtMs;
-
-    // 봇의 감방 단서(표식·수) 발화 예약 시각(ms). 0=예약 전, -1=이미 말했다.
-    // 탈옥 코드 재설계(정보를 인원 수만큼 쪼갬)에서 봇 몫의 단서도 방에 공유돼야 코드가
-    // 완성된다 — 봇이 자기 감방을 나오면 잠시 뒤 스크립트로 1회만 말한다(EscapePlan 참고).
-    // markSolved(컨트롤러/루프)에서 예약하고 tick(루프)에서 소비한다.
-    private volatile long botClueSayAtMs;
 
     // 플레이(PLAY)가 시작된 시각(ms). 0이면 아직 대기 중. 협동 구제 개방의 기준점.
     // tick(루프 스레드)에서만 쓰고 읽는다.
@@ -900,20 +890,6 @@ public class Room {
             }
         }
 
-        // 봇 감방 단서 발화: 예약 시각이 되면 자기 표식·수를 1회 말한다(스크립트 — Groq 판단과
-        // 무관하게 나간다). 도배 제한에 걸려 못 실었으면 다음 tick에 재시도한다.
-        if (botClueSayAtMs > 0 && nowMs >= botClueSayAtMs) {
-            Integer cellIdx = cellOfPlayer.get(BOT_ID);
-            if (cellIdx == null) {
-                botClueSayAtMs = -1; // 있을 수 없는 상태지만, 영원히 재시도하지는 않는다
-            } else {
-                EscapePlan.Clue c = EscapePlan.of(roomId).clue(cellIdx);
-                if (botSay("참, 별관 어느 방 벽에서 " + c.symbol() + " 표식을 봤어")) {
-                    botClueSayAtMs = -1;
-                }
-            }
-        }
-
         resolvePlayerOverlaps();
 
         // 정문 함정: 사람이 정문 코드를 푼 tick에 발동한다(컨트롤러 스레드가 세운 신호를 여기서 소비).
@@ -1108,12 +1084,6 @@ public class Room {
             if (firstCellOpenedAtMs == 0) {
                 firstCellOpenedAtMs = System.currentTimeMillis();
             }
-            // 봇이 자기 감방을 나왔다 → 잠시 뒤 자기 단서(표식·수)를 채팅에 1회 흘리도록 예약.
-            if (botClueSayAtMs == 0 && objectId.equals(botLockId())) {
-                botClueSayAtMs = System.currentTimeMillis()
-                        + BOT_CLUE_DELAY_MS
-                        + ThreadLocalRandom.current().nextLong(BOT_CLUE_JITTER_MS);
-            }
         }
         // 표식 게이트: 별관 4방 표식 퀴즈를 모두 풀면(표식 4개 획득) 배수관 샛길 철창이 열린다.
         // 단일 자물쇠→문이 아니라 4개 합이라 LOCK_OPENS가 아닌 여기서 직접 판정한다.
@@ -1121,12 +1091,6 @@ public class Room {
         if (STAMP_QUIZ_IDS.stream().allMatch(solvedIds::contains) && openDoors.add(DRAIN_GATE_DOOR)) {
             log.info("방 {} 표식 4개 완성 → 배수관 샛길 철창 {} 열림", roomId, DRAIN_GATE_DOOR);
         }
-    }
-
-    /** 봇 감방의 자물쇠 id("lock-A"…). 봇이 없거나 감방 배정 전이면 null. */
-    private String botLockId() {
-        Integer idx = cellOfPlayer.get(BOT_ID);
-        return idx == null ? null : "lock-" + (char) ('A' + idx);
     }
 
     /**

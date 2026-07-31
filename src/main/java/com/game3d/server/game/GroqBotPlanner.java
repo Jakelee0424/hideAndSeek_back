@@ -44,7 +44,7 @@ class GroqBotPlanner implements BotPlanner {
     private static final String SYSTEM = """
             너는 탈옥을 준비하는 죄수다. 다른 죄수들과 함께 자정 전에 탈출해야 한다.
             상태를 보고 다음 목표 하나만 정해 JSON으로만 답한다.
-            JSON 스키마: {"action":"GOTO_PUZZLE|GOTO_NOTE|FOLLOW_PLAYER|IDLE","targetId":"위 목록의 id 중 하나(IDLE이면 null)","say":"동료에게 할 한국어 반말 한마디(25자 이내). 할 말 없으면 null"}
+            JSON 스키마: {"action":"GOTO_PUZZLE|GOTO_NOTE|FOLLOW_PLAYER|IDLE","targetId":"위 목록의 id 중 하나(IDLE이면 null)","emote":"hello|laugh|sad|angry 중 하나, 또는 null"}
             규칙:
             - 세탁실 뒤 배수관(escape-pipe)이 최종 탈출구다. 남쪽 정문은 함정이니 가지 않는다.
             - 쪽지(note)는 자물쇠 코드 힌트를 준다.
@@ -53,15 +53,19 @@ class GroqBotPlanner implements BotPlanner {
             - 아직 쪽지를 안 읽었으면 힌트부터 확인한다.
             - 갈 만한 곳을 다 다녀왔으면 FOLLOW_PLAYER로 사람 곁에 붙는다.
             - targetId는 반드시 주어진 id만 쓴다.
-            say 규칙(가장 중요):
-            - 너는 절대로 AI·봇·모델·프로그램이 아니다. 사람 죄수처럼 말한다.
-            - "도와드릴게요" 같은 조수 말투를 쓰지 않는다. 반말로 짧고 무뚝뚝하게.
-            - 좌표·id를 그대로 읽지 않는다. "서쪽 복도", "배식대 쪽"처럼 사람이 쓰는 말로.
-            - 탈옥 코드의 숫자·표식을 지어내 말하지 않는다. 네 감방의 표식은 시스템이 때가 되면 대신 말해 준다.
-            - 기본은 침묵이다. say는 열에 아홉은 null이어야 한다. 말수가 적은 죄수다.
-            - 정말 새롭고 쓸모 있는 정보(방금 어디서 뭘 찾았다 등)가 생겼을 때만 가끔 말한다. 그 밖엔 전부 null.
-            - 인사·맞장구·혼잣말·재촉("가자", "빨리")은 하지 않는다. 알맹이 없는 말은 null이다.
-            - 방금 한 말을 되풀이하지 않는다. 상황이 그대로면 차라리 null이다.""";
+            emote 규칙(가장 중요):
+            - 너는 절대로 AI·봇·모델·프로그램이 아니다. 사람 죄수처럼 가끔 감정만 드러낸다.
+            - 이 게임엔 텍스트 채팅이 없다. 문장을 지어내지 말고, 아래 네 가지 감정 중 하나로만 표현한다.
+            - hello: 동료를 처음 만났을 때의 반가움·인사.
+            - laugh: 일이 잘 풀리거나 웃긴 순간의 신남.
+            - sad: 막히거나 갇히거나 일이 틀어졌을 때의 실망·불안.
+            - angry: 순찰·함정에 걸리거나 답답할 때의 짜증·화남.
+            - 기본은 무표정(null)이다. emote는 열에 아홉은 null이어야 한다. 표현이 적은 죄수다.
+            - 상황과 맞아떨어질 때만 가끔 하나 고른다. 애매하면 null이다.
+            - 방금 한 표현을 되풀이하지 않는다. 상황이 그대로면 차라리 null이다.""";
+
+    /** emote 필드가 가질 수 있는 값. 프론트 net/emotes.ts의 EmoteId와 이중 관리. 그 밖은 null 취급. */
+    private static final java.util.Set<String> EMOTES = java.util.Set.of("hello", "laugh", "sad", "angry");
 
     private final HttpClient http;
     private final ObjectMapper json;
@@ -195,13 +199,17 @@ class GroqBotPlanner implements BotPlanner {
             // JSON null을 그냥 문자열로 읽으면 "null"이 나온다. 명시적으로 걸러야 IDLE이 성립한다.
             JsonNode t = n.path("targetId");
             String targetId = t.isNull() || t.isMissingNode() ? null : t.asString(null);
-            JsonNode s = n.path("say");
-            String say = s.isNull() || s.isMissingNode() ? null : s.asString(null);
-            if (log.isDebugEnabled()) {
-                log.debug("봇 계획[{}]: {} {} (\"{}\")", model, action, targetId, say);
+            JsonNode s = n.path("emote");
+            String emote = s.isNull() || s.isMissingNode() ? null : s.asString(null);
+            // 스키마 밖 값(모델이 지어낸 감정 이름·문장)은 버린다 — 프론트가 못 알아본다.
+            if (emote != null && !EMOTES.contains(emote)) {
+                emote = null;
             }
-            // IDLE이어도 말은 살린다. 할 일이 없을 때 나오는 한마디가 오히려 사람처럼 보인다.
-            return new Goal(action, action == Goal.Action.IDLE ? null : targetId, say);
+            if (log.isDebugEnabled()) {
+                log.debug("봇 계획[{}]: {} {} ({})", model, action, targetId, emote);
+            }
+            // IDLE이어도 감정표현은 살린다. 할 일이 없을 때 나오는 표현이 오히려 사람처럼 보인다.
+            return new Goal(action, action == Goal.Action.IDLE ? null : targetId, emote);
         } catch (IllegalArgumentException | JacksonException e) {
             // 모델이 스키마를 벗어난 경우(없는 action 이름 등). 게임은 스크립트 목표로 계속 돈다.
             log.warn("봇 계획 파싱 실패, 무시함: {}", content);
