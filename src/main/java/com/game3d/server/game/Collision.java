@@ -295,10 +295,23 @@ final class Collision {
      * 문까지 막힌 것으로 세면 문 좌표 자체가 통행 불가가 되어, 문을 웨이포인트로 삼는 시야 검사가
      * 항상 실패한다 → 봇이 방 안에서 제자리만 맴돈다.
      *
-     * 소품은 본다 — 봇은 늘 1층(발높이 0)이므로 1층 소품(침대·테이블·계단 난간벽)을 피해 걸어야
-     * 한다. 안 그러면 직선 시야가 소품을 관통해 봇이 소품 앞에 붙어 정지한다.
+     * 소품은 본다 — 1층 소품(침대·테이블·계단 난간벽)을 피해 걸어야 한다. 안 그러면 직선 시야가
+     * 소품을 관통해 봇이 소품 앞에 붙어 정지한다.
+     *
+     * <p>발높이를 안 주면 1층(0)으로 본다 — 순찰 간수는 늘 1층이라 그대로 쓰면 된다.
      */
     static boolean blockedByWall(double x, double z) {
+        return blockedByWall(x, z, 0);
+    }
+
+    /**
+     * 발높이 feetY에서 (x,z)가 막히는가. 소품은 그 높이에서 유효한 것만 본다 —
+     * 1층 침대는 2층 통행을 막지 않고, 2층 난간은 1층을 막지 않는다({@link Obst}의 [y0,y1)).
+     *
+     * ⚠️ 2026-08-01 이전엔 발높이가 0으로 박혀 있었다("봇은 늘 1층"). 격자 길찾기({@link Nav})가
+     * 2층 레이어를 구우려면 층별 판정이 반드시 필요하다.
+     */
+    static boolean blockedByWall(double x, double z, double feetY) {
         if (x < -BOUND_X || x > BOUND_X || z < -BOUND_Z || z > BOUND_Z) {
             return true;
         }
@@ -307,11 +320,35 @@ final class Collision {
             pushOut(p, b.cx(), b.cz(), b.hx(), b.hz(), PLAYER_R);
         }
         for (Obst o : OBSTACLES) {
-            if (o.y0() <= 0 && 0 < o.y1()) { // 1층(발높이 0)에서 유효한 소품만
+            if (feetY >= o.y0() && feetY < o.y1()) {
                 pushOut(p, o.cx(), o.cz(), o.hx(), o.hz(), PLAYER_R);
             }
         }
         return Math.abs(p[0] - x) > 1e-9 || Math.abs(p[1] - z) > 1e-9;
+    }
+
+    /**
+     * (x,z)의 <b>계단 램프 높이</b>. 계단 사각형 밖이면 0(1층 바닥).
+     *
+     * {@link #groundHeight}는 "지금 발높이에서 STEP_UP 안에 닿는 바닥"이라 램프 중간 높이를
+     * 못 준다(1층에 선 채로는 램프 아랫부분만 보인다). 격자를 구울 때는 지금 어디 서 있는지와
+     * 무관하게 그 칸의 높이가 필요해서 따로 둔다.
+     */
+    static double rampHeight(double x, double z) {
+        if (x >= STAIR_X0 && x <= STAIR_X1 && z >= STAIR_Z0 && z <= STAIR_Z1) {
+            return FLOOR2_Y * (STAIR_X1 - x) / (STAIR_X1 - STAIR_X0);
+        }
+        return 0;
+    }
+
+    /** (x,z)가 2층 슬래브 위인가(그 칸에 2층 바닥이 있는가). */
+    static boolean onSlab2(double x, double z) {
+        for (Rect s : SLAB2) {
+            if (x >= s.x0() && x <= s.x1() && z >= s.z0() && z <= s.z1()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 직선 시야 판정의 표본 간격(m). */
@@ -321,19 +358,24 @@ final class Collision {
      * 두 점을 잇는 직선이 뚫려 있는가. 표본을 찍어 {@link #blockedByWall}에 걸리는지 본다.
      *
      * 문은 장애물로 세지 않는다 — 열린 문틈으로 보이는 게 맞고, 닫힌 문까지 벽으로 세면
-     * 문 좌표가 통행 불가가 되어 봇 길찾기가 무너진다({@link BotNav} 주석 참고).
+     * 문 좌표가 통행 불가가 되어 봇 길찾기가 무너진다({@link Nav} 주석 참고).
      *
-     * <p>봇 길찾기({@link BotNav})와 순찰 간수 시야({@link Patrol})가 함께 쓴다 —
+     * <p>봇 길찾기({@link Nav})와 순찰 간수 시야({@link Patrol})가 함께 쓴다 —
      * 같은 판정을 두 벌 두면 한쪽만 고쳐져 어긋난다.
      */
     static boolean lineClear(double x1, double z1, double x2, double z2) {
+        return lineClear(x1, z1, x2, z2, 0);
+    }
+
+    /** 발높이 feetY 기준 직선 시야. 두 점이 같은 층일 때만 의미가 있다. */
+    static boolean lineClear(double x1, double z1, double x2, double z2, double feetY) {
         double dx = x2 - x1;
         double dz = z2 - z1;
         double len = Math.hypot(dx, dz);
         int steps = (int) Math.ceil(len / LOS_STEP);
         for (int i = 1; i <= steps; i++) {
             double t = (double) i / steps;
-            if (blockedByWall(x1 + dx * t, z1 + dz * t)) {
+            if (blockedByWall(x1 + dx * t, z1 + dz * t, feetY)) {
                 return false;
             }
         }

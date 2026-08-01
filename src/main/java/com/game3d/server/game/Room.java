@@ -132,7 +132,7 @@ public class Room {
      * 좌표는 프론트 prisonLayout.ts의 room rect 그대로다(cafeteria·laundry·workshop·infirmary).
      *
      * 세탁실·의무실은 옆방과 통하는 개구부가 있어 문이 닫혀도 사람은 돌아 들어갈 수 있지만,
-     * BotNav 간선은 복도→방 하나뿐이라 봇 경로는 반드시 문을 지난다. 그래서 문 기준으로 막는다
+     * 봇은 못 여는 문 뒤를 목표로 삼으면 안 되므로 문 기준으로 막는다
      * — 틀리는 방향이 "안 가는 쪽"이라 안전하다(반대로 열어 두면 봇이 잠긴 문 앞에 박힌다).
      */
     private record RoomRect(String door, double x0, double z0, double x1, double z1) {
@@ -807,14 +807,16 @@ public class Room {
             double mx;
             double mz;
             boolean sprint = false;
+            boolean jump;
             if (p.bot) {
-                // 봇: STOMP 입력 대신 브레인이 이동 의도를 만든다. 이하 이동·충돌은 사람과 공유.
-                // 점프는 아직 안 쓴다(2층 웨이포인트가 없어 뛸 이유도 없다). 달리기는 쓴다 —
-                // 늘 정확히 걷기 속도(6.0)면 속도만 재도 사람과 구분됐다(2026-08-01 실측).
+                // 봇: STOMP 입력 대신 브레인이 이동 의도를 만든다. 이하 이동·충돌·수직 적분은
+                // 사람과 완전히 공유한다 — 달리기·점프·계단·2층 전부 같은 코드를 탄다.
+                // (2026-08-01 이전엔 봇만 수직 적분을 건너뛰어 y가 늘 1층에 못 박혀 있었다.)
                 double[] mv = p.brain.steer(p, players.values(), solvedIds, unreachableFor(p), nowMs);
                 mx = mv[0];
                 mz = mv[1];
                 sprint = p.brain.wantsSprint(nowMs);
+                jump = p.brain.wantsJump(nowMs, watched);
                 // 봇도 간수와 눈이 마주치면 멈춘다. 예전엔 순찰 내내 굳어 있었는데, 이제
                 // 시야에 들 때만 멈추므로 순찰 중에도 자연스럽게 돌아다닌다.
                 // 가끔은 실수한다(botSlipChance) — 스크립트라 늘 완벽히 멈추면
@@ -827,13 +829,16 @@ public class Room {
                 mx = p.inputMoveX(nowMs, timeout);
                 mz = p.inputMoveZ(nowMs, timeout);
                 sprint = p.inputSprint(nowMs, timeout);
+                jump = p.inputJump(nowMs, timeout);
             }
 
             // 수상한 움직임 판정. 조작을 막지는 않는다 — 움직였다는 사실만 본다.
             // 시점 회전(rotationY)은 세지 않는다. 고개를 돌리는 것까지 걸면 너무 가혹하다.
             // ⚠️ 걸리는 조건은 "순찰 중"이 아니라 "간수가 지금 나를 보고 있다"이다.
             //    시야 밖이면 순찰 중에도 뛰어다닐 수 있다.
-            if (watched && (isMoving(mx, mz) || (!p.bot && p.inputJump(nowMs, timeout)))) {
+            // ⚠️ 점프 판정은 사람·봇 **대칭**이어야 한다. 예전엔 `!p.bot`이 붙어 있었는데, 봇이
+            //    점프를 쓰기 시작한 지금 그대로 두면 "간수 앞에서 뛰어도 안 걸리는 놈 = AI"가 된다.
+            if (watched && (isMoving(mx, mz) || jump)) {
                 catchSuspicious(p, "이동");
             }
 
@@ -871,23 +876,22 @@ public class Room {
             // 수직: 바닥은 그 좌표의 지지면(1층 0 / 계단 램프 / 2층 FLOOR2_Y). STEP_UP 이하의
             // 턱은 걸어서 스냅해 오르내린다(계단). 접지 중 점프 의도가 있으면 발사, 그 뒤엔
             // 중력으로 적분. 누르고 있으면 착지 즉시 다시 뛴다(연속 점프) — 별도 엣지 판정 없음.
-            // 봇은 1층만 다니므로(웨이포인트가 전부 1층) 수직 적분을 건너뛴다 — y가 늘 GROUND_Y.
-            if (!p.bot) {
-                double floorY = Collision.groundHeight(p.x, p.z, p.y - Player.GROUND_Y) + Player.GROUND_Y;
-                boolean grounded = p.vy <= 0 && p.y - floorY <= Collision.STEP_UP;
-                if (grounded) {
-                    p.y = floorY; // 계단·턱 스냅(내려갈 때 튀지 않게)
-                    if (p.inputJump(nowMs, timeout)) {
-                        p.vy = props.jumpSpeed();
-                    }
+            // ⚠️ 봇도 사람과 같은 코드를 탄다(2026-08-01). 예전엔 `if (!p.bot)`으로 통째로
+            //    건너뛰어 봇의 y가 GROUND_Y에 못 박혀 있었고, 그래서 계단·2층에 못 올라갔다.
+            double floorY = Collision.groundHeight(p.x, p.z, p.y - Player.GROUND_Y) + Player.GROUND_Y;
+            boolean grounded = p.vy <= 0 && p.y - floorY <= Collision.STEP_UP;
+            if (grounded) {
+                p.y = floorY; // 계단·턱 스냅(내려갈 때 튀지 않게)
+                if (jump) {
+                    p.vy = props.jumpSpeed();
                 }
-                if (!grounded || p.vy > 0) {
-                    p.vy -= props.gravity() * dt;
-                    p.y += p.vy * dt;
-                    if (p.y <= floorY) {
-                        p.y = floorY;
-                        p.vy = 0;
-                    }
+            }
+            if (!grounded || p.vy > 0) {
+                p.vy -= props.gravity() * dt;
+                p.y += p.vy * dt;
+                if (p.y <= floorY) {
+                    p.y = floorY;
+                    p.vy = 0;
                 }
             }
 

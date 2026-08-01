@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * AI 봇의 2계층 브레인.
  *
  * <ul>
- *   <li><b>빠른 층</b>({@link #steer}) — 매 tick. 현재 goal까지의 경로를 {@link BotNav}로 풀어
+ *   <li><b>빠른 층</b>({@link #steer}) — 매 tick. 현재 goal까지의 경로를 {@link Nav}로 풀어
  *       다음 웨이포인트로 향하는 단위벡터를 낸다. 실제 이동·충돌은 Room.tick이 사람과 똑같이 처리한다.
  *       <br>⚠️ 예전엔 여기 "충돌 처리가 알아서 하니 벽 회피는 공짜"라고 적혀 있었는데 틀린 말이었다.
  *       충돌은 벽을 <b>통과하지 않게</b> 할 뿐 <b>돌아가게</b> 하지 않는다. 개활지 맵에선 티가 안 났지만
@@ -70,6 +70,10 @@ final class BotBrain {
     private static final long SPRINT_GAP_MIN_MS = 8000;
     private static final long SPRINT_GAP_MAX_MS = 20000;
 
+    /** 점프 간격(ms). 사람이 이따금 툭 뛰는 정도. 잦으면 그것대로 이상하다. */
+    private static final long JUMP_GAP_MIN_MS = 15000;
+    private static final long JUMP_GAP_MAX_MS = 40000;
+
     /** 정지. 호출부는 읽기만 한다(핫패스 할당 회피용 공유 상수). */
     private static final double[] STOP = {0, 0};
 
@@ -103,8 +107,10 @@ final class BotBrain {
     private volatile long lastPlanAtMs;
 
     // 목표 좌표: 루프 스레드만 쓴다(tick마다 배열 새로 만들지 않으려고 필드로 둔다).
+    // targetFeetY는 목표의 층이다 — POI는 전부 1층(0)이고, 사람을 따라갈 때만 그 사람 높이가 들어온다.
     private double targetX;
     private double targetZ;
+    private double targetFeetY;
 
     /** 이번 tick에 못 닿는 POI. 루프 스레드가 steer 진입 때 채우고 그 안에서만 읽는다. */
     private Set<String> blocked = Set.of();
@@ -116,6 +122,8 @@ final class BotBrain {
     // 달리기 구간. 루프 스레드 전용(steer/wantsSprint 둘 다 tick에서 불린다).
     private long sprintUntilMs;
     private long nextSprintAtMs;
+    /** 다음 점프 시각. 점프는 순간이라 구간이 아니라 시점 하나면 된다. */
+    private long nextJumpAtMs;
 
     /** [min,max) 사이 무작위 ms. 봇의 규칙성을 흐리는 데만 쓰므로 재현성은 필요 없다. */
     private static long jitter(long min, long max) {
@@ -144,18 +152,40 @@ final class BotBrain {
         return false;
     }
 
+    /**
+     * 지금 점프할지. 맵에 점프 없이 못 가는 곳은 없으니 순전히 "사람처럼 보이려는" 동작이다.
+     *
+     * @param watched 간수 시야 안이면 뛰지 않는다 — 사람도 그때는 얌전히 있는다. 순찰 적발 판정은
+     *                Room이 이 값을 그대로 써서 사람·봇을 <b>같은 조건으로</b> 본다.
+     */
+    boolean wantsJump(long nowMs, boolean watched) {
+        if (watched) {
+            return false;
+        }
+        if (nextJumpAtMs == 0) {
+            nextJumpAtMs = nowMs + jitter(JUMP_GAP_MIN_MS, JUMP_GAP_MAX_MS);
+            return false;
+        }
+        if (nowMs >= nextJumpAtMs) {
+            nextJumpAtMs = nowMs + jitter(JUMP_GAP_MIN_MS, JUMP_GAP_MAX_MS);
+            return true;
+        }
+        return false;
+    }
+
     // 쪽지를 읽느라 멈춰 있는 시각까지와, 이번 목표에서 이미 읽기를 마쳤는지. 루프 스레드 전용.
     // readDoneId가 없으면 읽기가 끝나자마자 같은 쪽지에서 또 읽기가 걸려 영영 못 떠난다.
     private long readingUntilMs;
     private String readDoneId;
 
-    // 길찾기 결과 캐시(루프 스레드 전용). BotNav는 시야 판정에 충돌 검사를 여러 번 돌리므로
+    // 길찾기 결과 캐시(루프 스레드 전용). Nav는 격자 BFS + 시야 판정이라 한 번이 공짜는 아니므로
     // 매 tick(20Hz) 돌리면 1 vCPU 서버엔 부담이다. 아래 조건에서만 다시 푼다.
     private double navX;
     private double navZ;
     private long navAtMs;
     private double navForX;
     private double navForZ;
+    private double navForFeetY;
 
     /** 경로 재탐색 주기(ms). 이보다 자주는 안 푼다. */
     private static final long NAV_REFRESH_MS = 400;
@@ -279,17 +309,22 @@ final class BotBrain {
 
     /** 길찾기 캐시 갱신. 주기가 지났거나, 목표가 크게 움직였거나, 웨이포인트에 다다랐을 때만 다시 푼다. */
     private void updateNav(Player self, long nowMs) {
+        double feetY = self.y - Player.GROUND_Y;
         boolean stale = nowMs - navAtMs >= NAV_REFRESH_MS
                 || Math.hypot(targetX - navForX, targetZ - navForZ) > NAV_TARGET_MOVED
-                || Math.hypot(navX - self.x, navZ - self.z) < NAV_REACHED;
+                || Math.hypot(navX - self.x, navZ - self.z) < NAV_REACHED
+                // 층이 바뀌면(계단을 올랐다) 경로를 즉시 다시 푼다 — 옛 경로는 아래층 것이다.
+                || Math.abs(feetY - navForFeetY) > Collision.STEP_UP;
         if (!stale) {
             return;
         }
-        double[] p = BotNav.steerPoint(self.x, self.z, targetX, targetZ);
+        double[] p = Nav.steerPoint(self.x, self.z, self.y - Player.GROUND_Y,
+                targetX, targetZ, targetFeetY);
         navX = p[0];
         navZ = p[1];
         navForX = targetX;
         navForZ = targetZ;
+        navForFeetY = feetY;
         navAtMs = nowMs;
     }
 
@@ -309,6 +344,7 @@ final class BotBrain {
                 }
                 targetX = p.x();
                 targetZ = p.z();
+                targetFeetY = 0; // POI는 전부 1층이다
                 return true;
             }
             case FOLLOW_PLAYER -> {
@@ -319,6 +355,9 @@ final class BotBrain {
                     if (!p.bot && p.id.equals(g.targetId())) {
                         targetX = p.x;
                         targetZ = p.z;
+                        // 2층에 있는 사람도 따라간다 — 격자가 계단을 알아서 태워 준다.
+                        // (웨이포인트 시절엔 층 개념이 없어 그 사람 **아래층**으로 걸어갔다.)
+                        targetFeetY = p.y - Player.GROUND_Y;
                         return true;
                     }
                 }

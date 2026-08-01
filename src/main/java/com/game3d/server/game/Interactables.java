@@ -77,8 +77,9 @@ final class Interactables {
             new Poi("note-laundry-plan", 26.5, 20.4, false, false, "오늘 세탁 일정(별관 복도)"),
             // 방 **안**의 표식 퀴즈. 문이 닫혀 있는 동안은 Room.unreachableFor가 통째로 걸러 내므로
             // 봇이 잠긴 문 앞으로 걸어가는 일은 없다 — 사람이 문을 연 뒤에야 목표가 된다.
-            // (식당 안 lock-fridge·note-cafe-tray는 넣지 않았다. 조리실이 벽으로 나뉘어 있는데
-            //  BotNav 노드는 식당 홀(14,24) 하나뿐이라 거기까지 가는 경로가 없다.)
+            // (식당 안 lock-fridge·note-cafe-tray는 아직 넣지 않았다. 조리실이 벽으로 나뉘어 있어
+            //  들어갈 개구부를 확인한 뒤에 넣는 게 안전하다. 격자 길찾기로 바꾼 뒤로는 경로가
+            //  있으면 Nav.reachabilityReport가 알려 주므로, 넣고 부팅 로그를 보면 된다.)
             new Poi("quiz-work", 18.5, 11.5, true, false, "작업대 표식(작업장 안)"),
             new Poi("quiz-med", 34.5, 11.2, true, false, "역학 조사서(의무실 안)"),
             new Poi("quiz-laundry", 26, 22.6, true, false, "건조대 표식(세탁실 안)")
@@ -88,7 +89,7 @@ final class Interactables {
             // 배수관(escape-pipe, 30/29)은 2026-07-27에 뺐다 — 봇이 한 판 내내 세탁실 문 앞에
             // 붙어 서 있던 원인이었다. botSolvable=false라 풀지도 못하는데 solvable=true여서
             // nearestUnsolved가 계속 골랐고, 그 좌표의 최근접 웨이포인트가 하필 **잠긴 세탁실
-            // 안**(BotNav 노드 10)이라 봇이 문 앞에 멈춘 채 판이 끝났다. 자기 감방을 푼 뒤엔
+            // 안**(옛 웨이포인트 노드 10)이라 봇이 문 앞에 멈춘 채 판이 끝났다. 자기 감방을 푼 뒤엔
             // 남은 solvable POI가 이것뿐이라 매 판 재현됐다(실측 110초 정지 — 이 결함이 있기
             // 전 코드로도 재현해, 그날의 다른 작업과 무관한 기존 문제임을 확인했다).
             // 이제 풀 게 없으면 nearestUnsolved가 null을 주고 봇은 쪽지 순회로 넘어간다.

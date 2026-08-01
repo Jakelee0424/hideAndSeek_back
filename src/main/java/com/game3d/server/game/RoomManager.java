@@ -42,6 +42,17 @@ public class RoomManager {
         log.info("진행 단계: 탈옥 {}s(도입 내레이션 {}s 포함) → 색출 {}s (총 {}분)",
                 phaseProps.play().toSeconds(), phaseProps.intro().toSeconds(),
                 phaseProps.vote().toSeconds(), phaseProps.totalMs() / 60_000);
+
+        // 봇 길찾기 전수 검사. 격자로 바꾸며 생긴 안전망이다 — 손으로 관리하던 웨이포인트
+        // 시절엔 노드가 고립돼도 조용히 통과했고, 한 판 돌려 봇이 벽 앞에 서 있어야 알았다.
+        // POI를 옮기거나 벽을 바꿔 길이 끊기면 여기서 부팅 로그로 드러난다.
+        String unreachable = Nav.reachabilityReport();
+        if (unreachable.isEmpty()) {
+            log.info("봇 길찾기 전수 검사: POI {}곳이 서로 전부 도달 가능 · {}",
+                    Interactables.all().size(), Nav.connectivityReport());
+        } else {
+            log.error("⚠️ 봇 길찾기 전수 검사 실패 — 아래 지점은 봇이 못 간다:\n{}", unreachable);
+        }
     }
 
     /**
