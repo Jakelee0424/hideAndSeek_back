@@ -81,6 +81,11 @@ final class BotBrain {
     private final BotPlanner llm;
     private final long intervalMs;
 
+    /** 펀치 설정(빈도·사거리). null이면 안 친다. */
+    private final BotProperties.Punch punchCfg;
+    /** 다음 펀치가 가능해지는 시각. 루프 스레드 전용. */
+    private long punchReadyAtMs;
+
     /** 봇의 감정표현을 방으로 흘려보내는 통로. Room이 도배 제한·전송을 맡는다. */
     private final java.util.function.Consumer<String> onSay;
 
@@ -209,10 +214,58 @@ final class BotBrain {
      * @param onSay 봇이 흘릴 감정표현 토큰("emote:<id>")을 받는 곳(Room::botSay). 플래너
      *              스레드(가상 스레드)에서 호출되므로 받는 쪽은 스레드 안전해야 한다.
      */
-    BotBrain(BotPlanner llm, long intervalMs, java.util.function.Consumer<String> onSay) {
+    BotBrain(BotPlanner llm, long intervalMs, BotProperties.Punch punchCfg,
+             java.util.function.Consumer<String> onSay) {
         this.llm = llm;
         this.intervalMs = intervalMs;
+        this.punchCfg = punchCfg;
         this.onSay = onSay;
+    }
+
+    /**
+     * 지금 앞에 있는 사람을 툭 칠지. Room.tick이 매 tick 묻고, true면 사람의 punch 요청과
+     * <b>같은 자리</b>({@code Player.requestPunch})에 세운다 — 사거리·전방 콘·쿨다운 판정은
+     * 그대로 {@code Room.resolvePunches}가 사람과 똑같이 한다.
+     *
+     * <p>여기서 보는 건 "칠 마음이 있는가"뿐이다: 사거리 안에 사람이 있고, 대충 그쪽을 보고 있고,
+     * 쉬는 시간이 지났고, 확률에 걸렸는가.
+     *
+     * @param patrolling 순찰 중이면 안 친다. 사람은 순찰 중 폭행이 곧 적발이라 자정이 깎이는데
+     *                   ({@code Room.punch}의 catchSuspicious), 봇이 팀에 그 벌을 안기면 안 된다.
+     */
+    boolean wantsPunch(Player self, Collection<Player> players, long nowMs, boolean patrolling) {
+        if (punchCfg == null || !punchCfg.enabled() || patrolling) {
+            return false;
+        }
+        if (punchReadyAtMs == 0) {
+            punchReadyAtMs = nowMs + punchCfg.minGapMs(); // 판 시작하자마자 치지는 않는다
+            return false;
+        }
+        if (nowMs < punchReadyAtMs) {
+            return false;
+        }
+        double fx = Math.sin(self.rotationY);
+        double fz = Math.cos(self.rotationY);
+        for (Player o : players) {
+            if (o.bot) {
+                continue;
+            }
+            double ex = o.x - self.x;
+            double ez = o.z - self.z;
+            double d = Math.hypot(ex, ez);
+            if (d > punchCfg.range() || d < 1e-4) {
+                continue;
+            }
+            if ((ex * fx + ez * fz) / d < 0.5) {
+                continue; // 앞에 없다 — 뒤통수를 노리는 그림은 사람 같지 않다
+            }
+            if (java.util.concurrent.ThreadLocalRandom.current().nextDouble() >= punchCfg.chance()) {
+                return false; // 기회는 있었지만 안 쳤다. 다음 기회에 다시 굴린다
+            }
+            punchReadyAtMs = nowMs + punchCfg.minGapMs();
+            return true;
+        }
+        return false;
     }
 
     Goal goal() {

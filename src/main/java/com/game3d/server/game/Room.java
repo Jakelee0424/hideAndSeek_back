@@ -274,12 +274,15 @@ public class Room {
     /** 봇 브레인의 LLM 느린 층. null이면 스크립트로만 돈다. */
     private final BotPlanner llm;
     private final long planIntervalMs;
+    /** 봇 펀치 설정(빈도·사거리). 봇 브레인에 그대로 넘긴다. */
+    private final BotProperties.Punch punchCfg;
 
     /** 테스트 방이면 준비·시작을 기다리지 않고 첫 입장에서 바로 시작한다. */
     private final boolean autoStart;
 
     Room(String roomId, GameProperties props, PhaseProperties phaseProps,
-         PatrolProperties patrolProps, BotPlanner llm, long planIntervalMs, boolean autoStart) {
+         PatrolProperties patrolProps, BotPlanner llm, long planIntervalMs,
+         BotProperties.Punch punchCfg, boolean autoStart) {
         this.roomId = roomId;
         this.props = props;
         this.phases = new PhaseTimeline(phaseProps);
@@ -288,6 +291,7 @@ public class Room {
         this.patrolProps = patrolProps;
         this.llm = llm;
         this.planIntervalMs = planIntervalMs;
+        this.punchCfg = punchCfg;
         this.autoStart = autoStart;
         // 테스트 방(autoStart)은 미션이 60초라 정식 5분이면 협동 구제를 볼 수가 없다 → 20초로.
         this.assistAfterMs = autoStart ? ASSIST_AFTER_MS_TEST : ASSIST_AFTER_MS;
@@ -377,7 +381,7 @@ public class Room {
             ready.add(key);
             readyDirty.set(true);
             return new Player(key, botNick(), s[0], s[1],
-                    new BotBrain(llm, planIntervalMs, this::botSay));
+                    new BotBrain(llm, planIntervalMs, punchCfg, this::botSay));
         });
     }
 
@@ -817,6 +821,11 @@ public class Room {
                 mz = mv[1];
                 sprint = p.brain.wantsSprint(nowMs);
                 jump = p.brain.wantsJump(nowMs, watched);
+                // 사람이 /punch를 쏘는 것과 같은 자리에 "요청"만 세운다 — 사거리·전방 콘·쿨다운
+                // 판정은 resolvePunches가 사람과 똑같이 처리한다.
+                if (p.brain.wantsPunch(p, players.values(), nowMs, patrolling)) {
+                    p.requestPunch();
+                }
                 // 봇도 간수와 눈이 마주치면 멈춘다. 예전엔 순찰 내내 굳어 있었는데, 이제
                 // 시야에 들 때만 멈추므로 순찰 중에도 자연스럽게 돌아다닌다.
                 // 가끔은 실수한다(botSlipChance) — 스크립트라 늘 완벽히 멈추면

@@ -23,6 +23,7 @@ public class RoomManager {
     /** null이면 봇이 스크립트로만 돈다. */
     private final BotPlanner llm;
     private final long planIntervalMs;
+    private final BotProperties.Punch punchCfg;
 
     public RoomManager(GameProperties props, PhaseProperties phaseProps,
                        PatrolProperties patrolProps, BotProperties botProps, GroqBotPlanner groq) {
@@ -36,6 +37,7 @@ public class RoomManager {
                 && cfg.models() != null && !cfg.models().isEmpty();
         this.llm = on ? groq : null;
         this.planIntervalMs = cfg.intervalMs();
+        this.punchCfg = botProps.punch();
         log.info("AI 봇 느린 층: {}", on
                 ? String.join(" / ", cfg.models()) + " 라운드로빈 (" + cfg.intervalMs() + "ms 주기)"
                 : "스크립트 전용");
@@ -103,7 +105,7 @@ public class RoomManager {
                 log.info("테스트 방 {} 생성 — 즉시 시작 + 단축 단계({}초)", id, TEST_PHASES.totalMs() / 1000);
             }
             return new Room(id, props, test ? TEST_PHASES : phaseProps,
-                    test ? TEST_PATROL : patrolProps, llm, planIntervalMs, test);
+                    test ? TEST_PATROL : patrolProps, llm, planIntervalMs, punchCfg, test);
         });
     }
 
