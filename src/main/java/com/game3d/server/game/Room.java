@@ -31,7 +31,16 @@ public class Room {
     private static final Logger log = LoggerFactory.getLogger(Room.class);
 
     /** AI 봇의 고정 id. 스냅샷엔 일반 원격 플레이어처럼 실린다. */
-    private static final String BOT_ID = "bot-1";
+    /**
+     * 봇의 플레이어 id. <b>사람과 똑같이 무작위 UUID로 만든다</b>
+     * (프론트 net/session.ts가 {@code crypto.randomUUID()}로 만든다).
+     *
+     * ⚠️ 예전엔 {@code "bot-1"} 고정이었다. 로스터의 bot 플래그를 false로 숨기고 닉네임 형식까지
+     * 맞춰 놨는데, 스냅샷 states에 그 id가 그대로 실려 나가 <b>개발자 도구만 열면 정답이 보였다</b>
+     * (2026-08-01 실측). 마지막이 AI 지목 투표라 이건 게임을 통째로 무너뜨린다.
+     * 방마다 다르고 판마다 다르다 — 로그로 방 하나를 관찰해도 다음 판에 못 써먹는다.
+     */
+    private final String botId = java.util.UUID.randomUUID().toString();
 
     /** 최종 탈출구(세탁실 뒤 배수관) id. 이게 풀리면 팀 전체의 탈출이 끝난 것으로 본다(협동 오브젝트라 1회). */
     private static final String ESCAPE_PIPE_ID = "escape-pipe";
@@ -116,6 +125,27 @@ public class Room {
         // 최종 탈출구(배수관) → 북벽 세탁실 뒤 배수관 해치. 클리어 연출이자, 봇·/door 요청이
         // 해치를 함부로 열지 못하게 막는 잠금(containsValue 검사)이기도 하다.
         "escape-pipe", "pipe-hatch"
+    );
+
+    /**
+     * 별관 방 넷의 영역 — <b>문이 닫혀 있는 동안 그 안의 POI·사람은 봇이 못 닿는다.</b>
+     * 좌표는 프론트 prisonLayout.ts의 room rect 그대로다(cafeteria·laundry·workshop·infirmary).
+     *
+     * 세탁실·의무실은 옆방과 통하는 개구부가 있어 문이 닫혀도 사람은 돌아 들어갈 수 있지만,
+     * BotNav 간선은 복도→방 하나뿐이라 봇 경로는 반드시 문을 지난다. 그래서 문 기준으로 막는다
+     * — 틀리는 방향이 "안 가는 쪽"이라 안전하다(반대로 열어 두면 봇이 잠긴 문 앞에 박힌다).
+     */
+    private record RoomRect(String door, double x0, double z0, double x1, double z1) {
+        boolean has(double x, double z) {
+            return x >= x0 && x <= x1 && z >= z0 && z <= z1;
+        }
+    }
+
+    private static final List<RoomRect> ANNEX_ROOMS = List.of(
+        new RoomRect("door-cafe", 6, 20, 22, 28),
+        new RoomRect("door-laundry", 22, 20, 38, 28),
+        new RoomRect("door-work", 6, 6, 22, 14),
+        new RoomRect("door-med", 22, 6, 38, 14)
     );
 
     /** 배수관 샛길 철창(표식 게이트) 문 id. 프론트 interactables.DRAIN_GATE_ID / Collision "gate-drain"과 같다. */
@@ -337,7 +367,7 @@ public class Room {
      * 사람만 감방에 갇혀 시작하게 바뀌면서 봇 혼자 중앙 복도에 서 있는 상태가 됐다.
      */
     public void spawnBot() {
-        players.computeIfAbsent(BOT_ID, key -> {
+        players.computeIfAbsent(botId, key -> {
             double[] s = takeFreeCell(key);
             joinOrder.add(key); // 봇도 순서에 넣되, 방장 선출에서는 제외된다(아래 snapshot 주석)
             // 봇은 준비 완료 상태로 들어온다. 서버의 allReady는 어차피 봇을 세지 않지만,
@@ -551,7 +581,7 @@ public class Room {
      *         꼭 나가야 하는 스크립트 발화(감방 단서)는 이 값을 보고 다음 tick에 재시도한다.
      */
     boolean botSay(String text) {
-        Player bot = players.get(BOT_ID);
+        Player bot = players.get(botId);
         if (bot == null) {
             return false;
         }
@@ -779,10 +809,12 @@ public class Room {
             boolean sprint = false;
             if (p.bot) {
                 // 봇: STOMP 입력 대신 브레인이 이동 의도를 만든다. 이하 이동·충돌은 사람과 공유.
-                // 봇은 아직 달리기/점프를 쓰지 않는다(브레인이 2D 방향만 낸다).
+                // 점프는 아직 안 쓴다(2층 웨이포인트가 없어 뛸 이유도 없다). 달리기는 쓴다 —
+                // 늘 정확히 걷기 속도(6.0)면 속도만 재도 사람과 구분됐다(2026-08-01 실측).
                 double[] mv = p.brain.steer(p, players.values(), solvedIds, unreachableFor(p), nowMs);
                 mx = mv[0];
                 mz = mv[1];
+                sprint = p.brain.wantsSprint(nowMs);
                 // 봇도 간수와 눈이 마주치면 멈춘다. 예전엔 순찰 내내 굳어 있었는데, 이제
                 // 시야에 들 때만 멈추므로 순찰 중에도 자연스럽게 돌아다닌다.
                 // 가끔은 실수한다(botSlipChance) — 스크립트라 늘 완벽히 멈추면
@@ -1123,6 +1155,37 @@ public class Room {
      */
     private Set<String> unreachableFor(Player self) {
         Set<String> out = null;
+
+        // ⚠️ 내가 아직 **잠긴 내 감방 안**이면, 방 밖의 것은 전부 못 닿는다. 나갈 길이 없다.
+        //
+        // 이걸 빼먹었다가 2026-08-01에 회귀를 냈다. 예전엔 목표를 늘 "최근접"으로 골라서 봇이
+        // 자기 자물쇠(3m)를 먼저 집었고, 그때부터 solving 상태라 바깥 목표는 의미가 없었다.
+        // 목표 선택에 무작위를 넣자 봇이 복도 자물쇠를 골라 **닫힌 제 방문을 78초간 밀었다**.
+        // 순서 운에 기대는 대신 규칙으로 못 박는다 — 갇힌 동안 갈 수 있는 곳은 제 자물쇠뿐이다.
+        int myCell = cellOf(self.x, self.z);
+        if (myCell >= 0) {
+            for (Map.Entry<String, String> e : LOCK_OPENS.entrySet()) {
+                Interactables.Poi lock = Interactables.find(e.getKey());
+                if (lock == null || cellOf(lock.x(), lock.z()) != myCell) {
+                    continue;
+                }
+                if (openDoors.contains(e.getValue())) {
+                    break; // 내 방 문이 열렸다 — 어디든 갈 수 있다
+                }
+                out = new HashSet<>();
+                for (Interactables.Poi poi : Interactables.all()) {
+                    if (cellOf(poi.x(), poi.z()) != myCell) {
+                        out.add(poi.id());
+                    }
+                }
+                for (Player other : players.values()) {
+                    if (!other.bot && cellOf(other.x, other.z) != myCell) {
+                        out.add(other.id);
+                    }
+                }
+                return out; // 아래 판정들은 볼 필요가 없다(이미 방 밖 전부가 불가다)
+            }
+        }
         for (String lockId : LOCK_OPENS.keySet()) {
             if (solvedIds.contains(lockId)) {
                 continue; // 문이 열렸으니 그 방 안의 것은 모두 닿는다
@@ -1143,6 +1206,27 @@ public class Room {
             }
             for (Player other : players.values()) {
                 if (!other.bot && sameCell(other.x, other.z, lock.x(), lock.z())) {
+                    out.add(other.id);
+                }
+            }
+        }
+
+        // 별관 방(식당·세탁실·작업장·의무실)도 같은 규칙. 봇은 이 문들을 스스로 못 연다
+        // (근접 열기는 LOCK_OPENS에 있는 문을 제외한다) — 사람이 열어 준 방에만 들어간다.
+        for (RoomRect r : ANNEX_ROOMS) {
+            if (openDoors.contains(r.door()) || r.has(self.x, self.z)) {
+                continue;
+            }
+            if (out == null) {
+                out = new HashSet<>();
+            }
+            for (Interactables.Poi poi : Interactables.all()) {
+                if (r.has(poi.x(), poi.z())) {
+                    out.add(poi.id());
+                }
+            }
+            for (Player other : players.values()) {
+                if (!other.bot && r.has(other.x, other.z)) {
                     out.add(other.id);
                 }
             }
@@ -1200,7 +1284,7 @@ public class Room {
             phase = phases.phase().name();
             phaseRemainMs = phases.remainMs(nowMs);
             if (ended) {
-                aiId = BOT_ID;
+                aiId = botId;
             }
         }
         // 표도 바뀔 때만. 결말 진입 시엔 tick이 votesDirty를 세워 최종 집계가 함께 나간다.

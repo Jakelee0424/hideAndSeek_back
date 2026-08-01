@@ -1,5 +1,6 @@
 package com.game3d.server.game;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
@@ -57,7 +58,30 @@ final class Interactables {
             // 감시탑 각인(정문 코드 힌트). 연병장 개활지라 직선으로 닿는다 —
             // 해독 문서 3곳이 빠지면서 봇이 순회할 쪽지가 둘뿐이라 순회가 너무 단조로워졌다.
             new Poi("gate-note1", -9, -27, false, false, "서쪽 감시탑 각인(연병장)"),
-            new Poi("gate-note2", 9, -27, false, false, "동쪽 감시탑 각인(연병장)")
+            new Poi("gate-note2", 9, -27, false, false, "동쪽 감시탑 각인(연병장)"),
+            // ── 별관(2026-08-01 추가) ───────────────────────────────────────────
+            // 관찰 결과 봇의 별관 체류가 **0초**였다. POI가 화장실·연병장에만 있어서, 사람들이
+            // 방 퍼즐과 씨름하는 동안 봇 혼자 딴 데를 돌았다 — 화면에서 바로 보이는 어색함이다.
+            //
+            // 복도 쪽은 항상 열려 있어 그냥 넣으면 된다. 방 문 자물쇠는 solvable이지만
+            // botSolvable=false다 — 봇은 못 풀고 잠깐 서서 살펴본 뒤 지나간다(사람이 푸는 걸
+            // 기다리는 그림). ⚠️ 그 **좌표가 복도**라서 안전하다. 아래 escape-pipe 사건처럼
+            // 좌표가 잠긴 방 안이면 봇이 그 문 앞에 박힌다.
+            new Poi("lock-cafe", 14, 19.3, true, false, "식당 문 자물쇠(별관 복도)"),
+            new Poi("lock-work", 14, 15.6, true, false, "작업장 문 자물쇠(별관 복도)"),
+            new Poi("lock-med", 30, 15.6, true, false, "의무실 문 자물쇠(별관 복도)"),
+            new Poi("lock-laundry", 30, 18.4, true, false, "세탁실 문 자물쇠(별관 복도)"),
+            new Poi("note-cafe-menu", 7.5, 19.6, false, false, "오늘의 식단표(별관 복도)"),
+            new Poi("note-cafe-order", 10.5, 19.6, false, false, "배식 순서표(별관 복도)"),
+            new Poi("note-pipe-map", 27, 19.6, false, false, "배관 노선도(별관 복도)"),
+            new Poi("note-laundry-plan", 26.5, 20.4, false, false, "오늘 세탁 일정(별관 복도)"),
+            // 방 **안**의 표식 퀴즈. 문이 닫혀 있는 동안은 Room.unreachableFor가 통째로 걸러 내므로
+            // 봇이 잠긴 문 앞으로 걸어가는 일은 없다 — 사람이 문을 연 뒤에야 목표가 된다.
+            // (식당 안 lock-fridge·note-cafe-tray는 넣지 않았다. 조리실이 벽으로 나뉘어 있는데
+            //  BotNav 노드는 식당 홀(14,24) 하나뿐이라 거기까지 가는 경로가 없다.)
+            new Poi("quiz-work", 18.5, 11.5, true, false, "작업대 표식(작업장 안)"),
+            new Poi("quiz-med", 34.5, 11.2, true, false, "역학 조사서(의무실 안)"),
+            new Poi("quiz-laundry", 26, 22.6, true, false, "건조대 표식(세탁실 안)")
             // 최종 탈출구(배수관)와 정문 자물쇠는 POI에 없다.
             //
             // 정문은 출구가 아니라 함정이라 뺐다(봇이 함정으로 걸어가면 안 된다).
@@ -96,21 +120,38 @@ final class Interactables {
      * 주려는 것이다. 호출부가 "다녀온 곳"을 exclude로 넘기므로 같은 쪽지를 반복해 고르지 않는다.
      */
     static Poi nearestUnvisitedNote(double x, double z, Set<String> exclude) {
-        Poi best = null;
-        double bestD2 = Double.MAX_VALUE;
+        List<Poi> near = nearestUnvisited(x, z, exclude, 1, false, Set.of());
+        return near.isEmpty() ? null : near.get(0);
+    }
+
+    /**
+     * 가까운 순 최대 n개 후보. 호출부(BotBrain)가 그중 하나를 무작위로 고른다.
+     *
+     * 늘 최근접만 고르면 순회 코스가 완전히 결정적이라, 봇이 <b>52초 주기로 똑같은 길</b>을
+     * 돈다(2026-08-01 실측). 사람은 그렇게 안 움직인다 — 마지막이 AI 지목 투표라 이게 곧 단서다.
+     *
+     * @param solvableOnly true면 안 풀린 해결 대상만, false면 쪽지만 본다
+     */
+    static List<Poi> nearestUnvisited(double x, double z, Set<String> exclude, int n,
+                                      boolean solvableOnly, Set<String> solved) {
+        List<Poi> cand = new ArrayList<>();
         for (Poi p : ALL) {
-            if (p.solvable() || exclude.contains(p.id())) {
+            if (p.solvable() != solvableOnly || exclude.contains(p.id())) {
                 continue;
             }
-            double dx = p.x() - x;
-            double dz = p.z() - z;
-            double d2 = dx * dx + dz * dz;
-            if (d2 < bestD2) {
-                bestD2 = d2;
-                best = p;
+            if (solvableOnly && solved.contains(p.id())) {
+                continue;
             }
+            cand.add(p);
         }
-        return best;
+        cand.sort((a, b) -> Double.compare(d2(a, x, z), d2(b, x, z)));
+        return cand.size() <= n ? cand : cand.subList(0, n);
+    }
+
+    private static double d2(Poi p, double x, double z) {
+        double dx = p.x() - x;
+        double dz = p.z() - z;
+        return dx * dx + dz * dz;
     }
 
     /**

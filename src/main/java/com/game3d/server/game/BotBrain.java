@@ -35,19 +35,40 @@ final class BotBrain {
     private static final double ARRIVE_R = 1.5;
 
     /**
-     * 자물쇠 앞에 서서 "푸는 척" 머무는 시간(ms).
+     * 자물쇠 앞에 서서 "푸는 척" 머무는 시간(ms). 매번 이 범위에서 새로 뽑는다.
      *
      * 봇은 퍼즐 UI가 없어 사실 즉시 풀 수 있지만, 도착하자마자 문이 열리면 보는 사람에게
      * 대놓고 치트로 보인다. 잠깐 멈춰 있다가 열리면 사람이 푸는 모습과 구분되지 않는다.
+     * ⚠️ 고정값(5초)이면 매번 정확히 같은 시간이라 그 자체가 규칙성이다 — 범위로 흔든다.
      */
-    private static final long SOLVE_DWELL_MS = 5000;
+    private static final long SOLVE_DWELL_MIN_MS = 4000;
+    private static final long SOLVE_DWELL_MAX_MS = 9000;
 
     /**
-     * 쪽지 앞에서 읽는 시늉으로 멈춰 있는 시간(ms).
+     * 쪽지 앞에서 읽는 시늉으로 멈춰 있는 시간(ms). 역시 매번 새로 뽑는다.
      *
      * 없으면 도착하자마자 다음 쪽지로 튀어서, 봇이 감방 사이를 쉼 없이 왕복하는 것처럼 보인다.
      */
-    private static final long READ_DWELL_MS = 2500;
+    private static final long READ_DWELL_MIN_MS = 1500;
+    private static final long READ_DWELL_MAX_MS = 4000;
+
+    /**
+     * 다음 목표를 고를 때 "최근접" 대신 후보로 볼 가까운 곳의 수.
+     *
+     * 1이면 코스가 완전히 결정적이라 봇이 같은 길을 무한 반복한다(2026-08-01 실측: 52초 주기).
+     * 셋 중 무작위면 사람처럼 왔다 갔다 하면서도 결국 전부 돈다.
+     */
+    private static final int PICK_POOL = 3;
+
+    /** 순회 도중 목적 없이 사람 쪽으로 잠깐 붙어 보는 확률. 사람은 늘 최단 경로로만 다니지 않는다. */
+    private static final double FOLLOW_CHANCE = 0.15;
+
+    // 달리기(2026-08-01). 예전엔 봇이 늘 정확히 걷기 속도(6.0)라, 속도만 재도 사람과 구분됐다.
+    // 사람은 급할 때 달린다(6.0 × 1.8 = 10.8) — 봇도 가끔 구간 달리기를 한다.
+    private static final long SPRINT_LEN_MIN_MS = 2000;
+    private static final long SPRINT_LEN_MAX_MS = 5000;
+    private static final long SPRINT_GAP_MIN_MS = 8000;
+    private static final long SPRINT_GAP_MAX_MS = 20000;
 
     /** 정지. 호출부는 읽기만 한다(핫패스 할당 회피용 공유 상수). */
     private static final double[] STOP = {0, 0};
@@ -91,6 +112,37 @@ final class BotBrain {
     // "푸는 중"인 자물쇠와 그 완료 시각. 루프 스레드 전용.
     private String solvingId;
     private long solvingUntilMs;
+
+    // 달리기 구간. 루프 스레드 전용(steer/wantsSprint 둘 다 tick에서 불린다).
+    private long sprintUntilMs;
+    private long nextSprintAtMs;
+
+    /** [min,max) 사이 무작위 ms. 봇의 규칙성을 흐리는 데만 쓰므로 재현성은 필요 없다. */
+    private static long jitter(long min, long max) {
+        return min + (long) (java.util.concurrent.ThreadLocalRandom.current().nextDouble() * (max - min));
+    }
+
+    /**
+     * 지금 달릴지. Room.tick이 사람의 sprint 입력과 같은 자리에서 읽는다.
+     *
+     * 이동 중일 때만 의미가 있다(정지 중엔 속도를 곱해도 0). 구간을 두는 이유는, 매 tick
+     * 확률을 굴리면 속도가 20Hz로 깜빡여 사람 눈에 미끄러지듯 보이기 때문이다.
+     */
+    boolean wantsSprint(long nowMs) {
+        if (nowMs < sprintUntilMs) {
+            return true;
+        }
+        if (nextSprintAtMs == 0) {
+            nextSprintAtMs = nowMs + jitter(SPRINT_GAP_MIN_MS, SPRINT_GAP_MAX_MS);
+            return false;
+        }
+        if (nowMs >= nextSprintAtMs) {
+            sprintUntilMs = nowMs + jitter(SPRINT_LEN_MIN_MS, SPRINT_LEN_MAX_MS);
+            nextSprintAtMs = sprintUntilMs + jitter(SPRINT_GAP_MIN_MS, SPRINT_GAP_MAX_MS);
+            return true;
+        }
+        return false;
+    }
 
     // 쪽지를 읽느라 멈춰 있는 시각까지와, 이번 목표에서 이미 읽기를 마쳤는지. 루프 스레드 전용.
     // readDoneId가 없으면 읽기가 끝나자마자 같은 쪽지에서 또 읽기가 걸려 영영 못 떠난다.
@@ -189,7 +241,7 @@ final class BotBrain {
             Interactables.Poi arrived = Interactables.find(g.targetId());
             if (arrived != null && arrived.botSolvable() && !solved.contains(arrived.id())) {
                 solvingId = arrived.id();
-                solvingUntilMs = nowMs + SOLVE_DWELL_MS;
+                solvingUntilMs = nowMs + jitter(SOLVE_DWELL_MIN_MS, SOLVE_DWELL_MAX_MS);
                 log.info("봇이 {} 앞에서 여는 중", arrived.id());
                 return STOP;
             }
@@ -199,7 +251,7 @@ final class BotBrain {
             // 도착하자마자 돌아선다. readDoneId로 "이번 목표에선 이미 봤다"를 표시하지 않으면
             // 대기가 끝난 다음 tick에 같은 자리에서 또 걸려 그 지점을 영영 못 떠난다.
             if (arrived != null && !arrived.botSolvable() && !arrived.id().equals(readDoneId)) {
-                readingUntilMs = nowMs + READ_DWELL_MS;
+                readingUntilMs = nowMs + jitter(READ_DWELL_MIN_MS, READ_DWELL_MAX_MS);
                 readDoneId = arrived.id();
                 return STOP;
             }
@@ -297,7 +349,21 @@ final class BotBrain {
             skip = new LinkedHashSet<>(visited);
             skip.addAll(blocked);
         }
-        Interactables.Poi next = Interactables.nearestUnsolved(self.x, self.z, solved, skip);
+
+        // 가끔은 목적 없이 사람 쪽으로 붙어 본다. 사람도 늘 최단 코스로만 다니지 않는다.
+        // (여기서 고른 따라가기는 도착해도 안 끝나지만, 다음 계획 주기에 새 목표로 덮인다.)
+        if (java.util.concurrent.ThreadLocalRandom.current().nextDouble() < FOLLOW_CHANCE) {
+            Player buddy = nearestHuman(self, players);
+            if (buddy != null) {
+                goal = Goal.followPlayer(buddy.id);
+                return;
+            }
+        }
+
+        // ⚠️ 최근접 하나가 아니라 **가까운 셋 중 무작위**로 고른다. 최근접만 고르면 코스가
+        // 결정적이라 봇이 같은 길을 무한 반복한다(2026-08-01 실측: 52초 주기로 완전히 동일).
+        Interactables.Poi next = pick(Interactables.nearestUnvisited(
+                self.x, self.z, skip, PICK_POOL, true, solved));
         if (next != null) {
             goal = Goal.gotoPuzzle(next.id());
             return;
@@ -305,7 +371,8 @@ final class BotBrain {
 
         // 풀 게 없으면 쪽지를 읽으러 다닌다. 이게 없으면 자물쇠가 다 풀린 뒤로는 아래 따라가기만
         // 남아, 봇이 게임 내내 사람 뒤를 졸졸 따라다닌다.
-        Interactables.Poi note = Interactables.nearestUnvisitedNote(self.x, self.z, skip);
+        Interactables.Poi note = pick(Interactables.nearestUnvisited(
+                self.x, self.z, skip, PICK_POOL, false, solved));
         if (note != null) {
             goal = Goal.gotoNote(note.id());
             return;
@@ -327,6 +394,14 @@ final class BotBrain {
         // 여기까지 오면 닿는 쪽지가 아예 없다(잠긴 방에 다 갇혀 있음). 그때만 사람을 따라간다.
         Player mate = nearestHuman(self, players);
         goal = mate == null ? Goal.IDLE : Goal.followPlayer(mate.id);
+    }
+
+    /** 후보 목록에서 하나를 무작위로. 비었으면 null. */
+    private static Interactables.Poi pick(List<Interactables.Poi> cand) {
+        if (cand.isEmpty()) {
+            return null;
+        }
+        return cand.get(java.util.concurrent.ThreadLocalRandom.current().nextInt(cand.size()));
     }
 
     /**
