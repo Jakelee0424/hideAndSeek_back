@@ -96,9 +96,11 @@ final class Collision {
         // 배수관 우회 차단: 북쪽 순찰로(z28~30)를 서편에서 돌아오는 길을 세탁실 서벽 연장선(x22)에서 막는다.
         //   → 배수관 구역은 동쪽 샛길 철창(gate-drain, 표식 4개)으로만 들어간다. 프론트 OBSTACLES와 같은 값.
         new Obst(22, 29, 0.2, 1, -1, 3),
-        // 정문 기둥 + 연결 복도 철창 기둥(x=-3: 출입구 동선(x=0)을 비켜 세운다)
+        // 정문 기둥
         new Obst(-4.5, -30, 0.5, 0.5, -1, 3), new Obst(4.5, -30, 0.5, 0.5, -1, 3),
-        new Obst(-3, 14.5, 0.1, 0.12, -1, 3), new Obst(-3, 19.5, 0.1, 0.12, -1, 3),
+        // 수감동↔복도 철창 게이트(x=-6 개구부 z14~20): 가운데 2m(z16~18)만 문(gate-cellblock)이고
+        //   나머지(z14~16 · z18~20)는 상시 철창벽. E로 문을 여닫는다. 프론트 OBSTACLES와 같은 값.
+        new Obst(-6, 15, 0.1, 1, -1, 3), new Obst(-6, 19, 0.1, 1, -1, 3),
         // 감시탑 안쪽 다리
         new Obst(-40.8, -28.8, 0.15, 0.15, -1, 3), new Obst(40.8, -28.8, 0.15, 0.15, -1, 3),
         new Obst(-40.8, 28.8, 0.15, 0.15, -1, 3), new Obst(40.8, 28.8, 0.15, 0.15, -1, 3),
@@ -235,6 +237,13 @@ final class Collision {
         // 방 스펙(벽 개구부)이 아니라 자립 장벽이라 여기서 직접 추가한다. Room이 표식 4개면 openDoors에
         // "gate-drain"을 넣어 통과시킨다. ⚠️ 프론트 prisonLayout.DRAIN_GATE와 좌표·id를 맞춘다.
         out.add(new DoorBox("gate-drain", 40, 26, 2, 0.25));
+        // 수감동↔복도 철창 게이트의 작은 문(x=-6, z16~18, 폭 2m). 상시 개폐(E) — Room.toggleDoor가
+        // openDoors에 "gate-cellblock"을 넣고 빼며, 없으면(닫힘) 충돌로 막는다. 양옆 철창벽은 위 OBSTACLES.
+        // ⚠️ 프론트 prisonLayout.CELLBLOCK_GATE와 좌표·id를 맞춘다.
+        out.add(new DoorBox("gate-cellblock", -6, 17, 0.1, 1));
+        // 건물 출입구(화장실 맞은편) 철창 슬라이딩 게이트(x=0, z14, 폭 3m). 상시 개폐(E) — Room.toggleDoor.
+        // ⚠️ 프론트 prisonLayout.ENTRANCE_GATE와 좌표·id를 맞춘다.
+        out.add(new DoorBox("gate-entrance", 0, 14, 1.5, 0.2));
         return out.toArray(new DoorBox[0]);
     }
 
