@@ -921,7 +921,7 @@ public class Room {
                 // 문에서 1.1m라 봇이 지나가며 남의 방까지 다 열어 퍼즐이 통째로 무의미해진다.
                 // 자기 방은 위 markSolved로 열리니 이 경로는 잠기지 않은 문에만 필요하다.
                 String door = Collision.nearestClosedDoor(p.x, p.z, openDoors, BOT_DOOR_RANGE);
-                if (door != null && !LOCK_OPENS.containsValue(door) && openDoors.add(door)) {
+                if (door != null && !puzzleControlledDoor(door) && openDoors.add(door)) {
                     log.info("방 {} 봇이 감방문 {} 열었다", roomId, door);
                 }
 
@@ -1147,14 +1147,24 @@ public class Room {
      * 겸사겸사 퍼즐을 건너뛰고 door만 쏘아 여는 길도 막힌다.
      */
     public void toggleDoor(String doorId) {
-        // 표식 게이트(gate-drain)도 /door로 못 열게 막는다 — 오직 표식 4개(markSolved)로만 열린다.
-        if (doorId == null || doorId.isBlank() || LOCK_OPENS.containsValue(doorId)
-                || DRAIN_GATE_DOOR.equals(doorId)) {
+        if (doorId == null || doorId.isBlank() || puzzleControlledDoor(doorId)) {
             return;
         }
         if (!openDoors.remove(doorId)) {
             openDoors.add(doorId);
         }
+    }
+
+    /**
+     * <b>퍼즐만이 여는 문</b> — 자물쇠가 관리하는 감방문(LOCK_OPENS)과 표식 게이트(gate-drain).
+     * 이 문들의 상태는 {@link #markSolved}가 단독으로 정한다.
+     *
+     * ⚠️ 여는 길이 <b>둘</b>이라 판정도 한곳에 모아 둔다 — 사람의 /door(toggleDoor)와 <b>봇의 근접
+     * 개방</b>({@link #tick}). 예전엔 toggleDoor만 gate-drain을 막아, 봇이 3m 안을 지나면 표식 4개를
+     * 안 풀고도 배수관 철창이 열렸다(자유 개폐 철창 게이트가 들어오며 드러난 구멍).
+     */
+    private static boolean puzzleControlledDoor(String doorId) {
+        return LOCK_OPENS.containsValue(doorId) || DRAIN_GATE_DOOR.equals(doorId);
     }
 
     /**
