@@ -60,9 +60,11 @@ class GroqBotPlanner implements BotPlanner {
             - laugh: 일이 잘 풀리거나 웃긴 순간의 신남.
             - sad: 막히거나 갇히거나 일이 틀어졌을 때의 실망·불안.
             - angry: 순찰·함정에 걸리거나 답답할 때의 짜증·화남.
-            - 기본은 무표정(null)이다. emote는 열에 아홉은 null이어야 한다. 표현이 적은 죄수다.
-            - 상황과 맞아떨어질 때만 가끔 하나 고른다. 애매하면 null이다.
-            - 방금 한 표현을 되풀이하지 않는다. 상황이 그대로면 차라리 null이다.""";
+            - 상황이 달라졌으면 표현한다. 서너 번에 한 번쯤은 감정을 드러내는 게 자연스럽다.
+            - ⚠️ 이 게임은 마지막에 "누가 사람이 아니었나"를 지목한다. 한 판 내내 아무 표정도
+              없으면 그것만으로 정체가 드러난다. 무표정으로 일관하지 마라.
+            - 그렇다고 매번 표현하지는 않는다. 상황이 그대로면 null이다.
+            - 방금 한 표현을 되풀이하지 않는다.""";
 
     /** emote 필드가 가질 수 있는 값. 프론트 net/emotes.ts의 EmoteId와 이중 관리. 그 밖은 null 취급. */
     private static final java.util.Set<String> EMOTES = java.util.Set.of("hello", "laugh", "sad", "angry");

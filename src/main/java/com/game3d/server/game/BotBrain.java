@@ -102,8 +102,12 @@ final class BotBrain {
     /** 봇 감정표현 최소 간격(ms). 이 안에는 새 표현을 내보내지 않는다 — 짧은 사이에 연달아
      *  쏟아내면 사람 같지 않다. 0이면 매 계획마다 표현해 수다스러워진다.
      *  ⚠️ 0이나 너무 큰 값 금지: 봇이 아예 표현을 안 하면 "한 번도 표현 안 한 놈 = AI"가 되어
-     *  투표가 무너진다. */
-    private static final long SAY_COOLDOWN_MS = 25000;
+     *  투표가 무너진다.
+     *
+     *  25s → 18s (2026-08-04). 25초는 텍스트 채팅 시절 값이다. 채팅이 사라지고 남은 게
+     *  감정표현뿐인데, 프롬프트의 "열에 아홉은 null"까지 겹쳐 한 판에 거의 아무 표현도 안 했다
+     *  (운영 로그의 봇 계획이 전부 emote=null이었다). 프롬프트를 함께 고쳤으니 둘을 같이 볼 것. */
+    private static final long SAY_COOLDOWN_MS = 18000;
 
     /** 호출 중복 방지. 응답이 주기보다 느려도 요청이 쌓이지 않는다. */
     private final AtomicBoolean inFlight = new AtomicBoolean();
