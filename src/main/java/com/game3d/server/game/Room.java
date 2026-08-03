@@ -313,6 +313,31 @@ public class Room {
     }
 
     /**
+     * 결말(ENDED)에 들어선 시각. 0이면 아직 안 끝났다.
+     * 이 시각부터 {@link #ENDED_KEEP_MS}가 지나면 사람이 남아 있어도 방을 치운다.
+     */
+    private volatile long endedAtMs;
+
+    /**
+     * 결말 뒤 방을 얼마나 더 살려 두는가. 엔딩 연출(EndingOverlay)이 다 흐를 시간은 주되,
+     * 그 뒤엔 반드시 치운다.
+     *
+     * ⚠️ <b>방 제거가 이 게임의 유일한 초기화 수단이다.</b> Room에는 상태 리셋이 없고
+     * {@link PhaseTimeline#start}는 멱등이라 끝난 방은 다시 시작되지도 않는다. 예전엔 빈 방만
+     * 치웠는데({@link #isEmpty}), 그러면 <b>한 명이라도 남아 있는 순간 그 방은 영원히 이전 판
+     * 상태로 굳는다</b> — 새로 들어온 사람이 감방문이 다 열린 방을 보게 된다(실측 재현).
+     */
+    private static final long ENDED_KEEP_MS = 90_000;
+
+    /**
+     * 결말이 난 지 오래돼 치울 때가 됐는가. 사람이 남아 있어도 참이 될 수 있다 —
+     * 다음에 같은 방 코드로 들어오면 새 방이 생겨 깨끗한 판이 된다.
+     */
+    public boolean expired(long nowMs) {
+        return endedAtMs != 0 && nowMs - endedAtMs >= ENDED_KEEP_MS;
+    }
+
+    /**
      * 사람이 아무도 없으면 빈 방. 봇은 인원으로 세지 않는다.
      * (봇을 세면 봇만 남은 방이 영영 안 치워지고 루프에 계속 남는다)
      */
@@ -741,6 +766,7 @@ public class Room {
             // 결말에 들어서면 최종 집계를 한 번 실어 보낸다(그 전 표가 그대로면 dirty가 안 서 있다).
             if (phases.phase() == GamePhase.ENDED) {
                 votesDirty.set(true);
+                endedAtMs = nowMs; // 이 시각부터 재서 방을 치운다(아래 expired 참조)
             }
             log.info("방 {} 단계 전환 → {}", roomId, phases.phase());
         }
@@ -1100,6 +1126,12 @@ public class Room {
      * (예전엔 순찰 중이기만 하면 어디서 풀든 걸렸다. 지금은 간수 시야 안에서만 걸린다.)
      */
     public void solveByPlayer(String playerId, String objectId) {
+        // 탈옥(PLAY) 중에만 받는다 — castVote가 VOTE 단계만 받는 것과 같은 이유다.
+        // 대기방(LOBBY)에서도 받아 주면 시작 전에 퍼즐이 풀려, 방이 재사용될 때 감방문이
+        // 열린 채로 판이 시작된다(실측 재현). 결말 뒤에 뒤늦게 도착한 solve도 막힌다.
+        if (phases.phase() != GamePhase.PLAY) {
+            return;
+        }
         Player p = playerId == null ? null : players.get(playerId);
         if (p != null && patrol.sees(p.x, p.z)) {
             catchSuspicious(p, "상호작용");

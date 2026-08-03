@@ -117,8 +117,25 @@ public class RoomManager {
         return rooms.values();
     }
 
-    /** 빈 룸 정리(루프에서 주기 호출). */
-    public void removeIfEmpty(String roomId) {
-        rooms.computeIfPresent(roomId, (id, room) -> room.isEmpty() ? null : room);
+    /**
+     * 룸 정리(루프에서 주기 호출). <b>비었거나</b> 결말이 난 지 오래된 방을 지운다.
+     *
+     * ⚠️ 방 제거가 이 게임의 유일한 초기화 수단이다(Room에 상태 리셋이 없고 PhaseTimeline.start는
+     * 멱등이다). 그래서 "끝난 방"은 사람이 남아 있어도 치운다 — 안 치우면 그 방은 감방문이 다
+     * 열린 채로 굳어, 다시 들어온 사람이 이전 판 상태를 그대로 본다.
+     *
+     * 지운 뒤 같은 방 코드로 들어오면 {@link #getOrCreate}가 새 방을 만든다.
+     */
+    public void remove(String roomId, long nowMs) {
+        rooms.computeIfPresent(roomId, (id, room) -> {
+            if (room.isEmpty()) {
+                return null;
+            }
+            if (room.expired(nowMs)) {
+                log.info("방 {} 정리 — 결말 뒤 보관 시간이 지났다(다음 입장은 새 방)", id);
+                return null;
+            }
+            return room;
+        });
     }
 }

@@ -30,8 +30,10 @@ public class GameLoop {
     public void tick() {
         long now = System.currentTimeMillis();
         for (Room room : roomManager.rooms()) {
-            if (room.isEmpty()) {
-                roomManager.removeIfEmpty(room.roomId());
+            // 빈 방과 "끝난 지 오래된 방"을 치운다. 방 제거가 유일한 초기화 수단이라,
+            // 사람이 남아 있다는 이유로 끝난 방을 계속 살려 두면 다음 판이 이전 판 상태로 시작된다.
+            if (room.isEmpty() || room.expired(now)) {
+                roomManager.remove(room.roomId(), now);
                 continue;
             }
             room.tick(now);
