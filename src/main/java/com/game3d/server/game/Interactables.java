@@ -53,10 +53,8 @@ final class Interactables {
             //    2026-07-31 프론트 좌표로 맞췄다.
             new Poi("note-med1", 3, 22, false, false, "약장 라벨(화장실)"),
             new Poi("note-laundry1", 2, 24.5, false, false, "세탁 안내문(화장실)"),
-            new Poi("note-laundry2", 24, -10, false, false, "젖은 쪽지(연병장 동편)"),
-            new Poi("note-med2", -24, -18, false, false, "처방 기록(연병장 서편)"),
-            // 감시탑 각인(정문 코드 힌트). 연병장 개활지라 직선으로 닿는다 —
-            // 해독 문서 3곳이 빠지면서 봇이 순회할 쪽지가 둘뿐이라 순회가 너무 단조로워졌다.
+            // (연병장 쪽지 note-laundry2·note-med2는 2026-08-03 사용자 지시로 제거. 프론트 interactables.ts도 동일.)
+            // 감시탑 각인(정문 코드 힌트). 연병장 개활지라 직선으로 닿는다.
             new Poi("gate-note1", -9, -27, false, false, "서쪽 감시탑 각인(연병장)"),
             new Poi("gate-note2", 9, -27, false, false, "동쪽 감시탑 각인(연병장)"),
             // ── 별관(2026-08-01 추가) ───────────────────────────────────────────
