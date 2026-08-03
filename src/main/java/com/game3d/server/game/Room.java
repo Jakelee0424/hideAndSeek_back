@@ -301,8 +301,8 @@ public class Room {
         return roomId;
     }
 
-    /** 방에 있는 사람 수(AI 봇 제외). 정원 판정에 쓴다. */
-    private int humanCount() {
+    /** 방에 있는 사람 수(AI 봇 제외). 정원 판정과 입장 로그에 쓴다. */
+    public int humanCount() {
         int n = 0;
         for (Player p : players.values()) {
             if (!p.bot) {

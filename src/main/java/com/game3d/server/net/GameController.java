@@ -11,6 +11,8 @@ import com.game3d.server.dto.VoteMessage;
 import com.game3d.server.game.Room;
 import com.game3d.server.game.RoomManager;
 import com.game3d.server.game.WaitingQueue;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
@@ -27,6 +29,8 @@ import java.util.Map;
  */
 @Controller
 public class GameController {
+
+    private static final Logger log = LoggerFactory.getLogger(GameController.class);
 
     static final String ATTR_ROOM = "roomId";
     static final String ATTR_PLAYER = "playerId";
@@ -49,8 +53,12 @@ public class GameController {
     public void join(@DestinationVariable("roomId") String roomId,
                      @Payload JoinMessage msg,
                      SimpMessageHeaderAccessor accessor) {
+        // ⚠️ 입장 거부는 여기서 조용히 끝난다 — 클라에 통지가 가지 않는다(스냅샷이 안 올 뿐이다).
+        //    그래서 "분명히 들어왔는데 투표 후보에 안 보인다" 같은 신고가 들어와도 사후에
+        //    추적할 방법이 없었다. 두 관문 다 이유를 남긴다.
         if (!queue.admitOnJoin(msg.id(), msg.token())) {
-            return; // 정원 초과. 클라는 대기열 REST로 순번을 받아 기다린다.
+            log.info("방 {} 대기열 관문에서 거부 → {} (슬롯이 찼거나 줄 서는 중)", roomId, msg.id());
+            return; // 클라는 대기열 REST로 순번을 받아 기다린다.
         }
 
         Room room = roomManager.getOrCreate(roomId);
@@ -59,6 +67,7 @@ public class GameController {
             queue.release(msg.id());
             return; // 세션에도 묶지 않는다 — 이후 input/solve가 통과되면 안 된다.
         }
+        log.info("방 {} 입장 {} ({}) → 현재 사람 {}명", roomId, msg.nick(), msg.id(), room.humanCount());
 
         Map<String, Object> attrs = accessor.getSessionAttributes();
         if (attrs != null) {
