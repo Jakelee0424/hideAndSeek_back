@@ -52,6 +52,25 @@ final class Collision {
         new Rect(-38, STAIR_Z0, STAIR_X0, STAIR_Z1),
     };
 
+    /** 별관·화장실 평지붕 높이. 벽을 여기까지 올렸다(프론트 prisonLayout.ANNEX_H와 같은 값). */
+    static final double ANNEX_H = 4.5;
+
+    /**
+     * 지붕 슬래브(별관 + 화장실) — 프론트 prisonLayout.ROOF_SLABS와 같은 값.
+     *
+     * ⚠️ {@link #SLAB2}와 <b>따로</b> 둔다. SLAB2는 {@link #onSlab2}를 통해 봇 길찾기 격자의
+     * 2층 레이어로도 쓰이는데, 지붕은 올라갈 길이 없어 격자에 넣으면 고립된 섬이 된다
+     * (부팅 도달성 리포트의 2층 비율만 망가뜨린다). 여기서 정하는 건 "밟으면 딛는 바닥"뿐이다.
+     *
+     * 지붕이 렌더에만 있고 이 목록에 없으면, 지붕 위에 선 순간 딛을 바닥이 없어 <b>그대로
+     * 잠긴 방 안으로 떨어진다</b>. 지금은 2층에서 지붕으로 나갈 길이 없지만, 수감동 동벽이나
+     * 2층 막이를 건드리는 순간 그 구멍이 열린다.
+     */
+    private static final Rect[] ROOF_SLABS = {
+        new Rect(6, 6, 38, 28),   // 별관(식당·세탁실·작업장·의무실 + 별관 복도)
+        new Rect(-6, 20, 6, 28),  // 화장실
+    };
+
     private record Box(double cx, double cz, double hx, double hz) {}
 
     /**
@@ -293,6 +312,15 @@ final class Collision {
             for (Rect s : SLAB2) {
                 if (x >= s.x0() && x <= s.x1() && z >= s.z0() && z <= s.z1()) {
                     g = FLOOR2_Y;
+                    break;
+                }
+            }
+        }
+        // 별관·화장실 지붕도 딛을 수 있는 바닥이다(2층과 같은 높이라 위 분기와 겹치지 않는다).
+        if (g == 0 && ANNEX_H <= feetY + STEP_UP) {
+            for (Rect s : ROOF_SLABS) {
+                if (x >= s.x0() && x <= s.x1() && z >= s.z0() && z <= s.z1()) {
+                    g = ANNEX_H;
                     break;
                 }
             }
