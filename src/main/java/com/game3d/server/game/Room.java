@@ -90,6 +90,29 @@ public class Room {
     /** 봇이 감방문을 여는 사거리(m). 프론트 prisonLayout.DOOR_RANGE 와 같은 값. */
     private static final double BOT_DOOR_RANGE = 3.0;
 
+    /**
+     * 봇이 몸을 돌리는 최대 각속도(rad/s). 사람이 마우스로 도는 속도쯤이다(약 400°/s).
+     * 이보다 크면 웨이포인트가 바뀔 때 방향이 통째로 튀어 제자리에서 도는 것처럼 보이고,
+     * 너무 작으면 코너에서 벽을 향한 채 미끄러진다.
+     */
+    private static final double BOT_TURN_RATE = Math.toRadians(400);
+
+    /** cur에서 want 쪽으로 최대 maxStep(rad)만큼 돌린 각도. 짧은 쪽으로 돈다. */
+    private static double turnToward(double cur, double want, double maxStep) {
+        double diff = want - cur;
+        // -π~π로 접어 넣는다 — 안 하면 179°→-179° 같은 경계에서 먼 쪽으로 한 바퀴 돈다.
+        while (diff > Math.PI) {
+            diff -= 2 * Math.PI;
+        }
+        while (diff < -Math.PI) {
+            diff += 2 * Math.PI;
+        }
+        if (Math.abs(diff) <= maxStep) {
+            return want;
+        }
+        return cur + Math.copySign(maxStep, diff);
+    }
+
     /** 감방 내부 반경(m). 스폰·같은-감방 판정에 쓴다. 프론트 감방 rect(16×8)의 절반. */
     private static final double CELL_HALF_X = 8;
     private static final double CELL_HALF_Z = 4;
@@ -952,8 +975,14 @@ public class Room {
                 }
 
                 // 봇은 진행 방향을 본다(프론트 LocalPlayer와 같은 규약). 정지 중엔 마지막 회전 유지.
+                //
+                // ⚠️ 목표 각도로 **돌려 준다**(즉시 스냅 금지). 예전엔 atan2 값을 그대로 넣었는데,
+                // 길찾기 웨이포인트가 바뀔 때마다 방향이 통째로 튀어 tick당 중앙값 36.7°(≈초당
+                // 730°)로 돌았다 — 180° 반전도 흔했다. 화면에서는 팽이처럼 제자리에서 도는 걸로
+                // 보인다("세탁기 돌듯이 돈다"는 신고의 정체). 사람은 마우스 시점 값이라 이런 튐이
+                // 없으므로, 봇만 각속도를 제한해 사람과 비슷한 속도로 돌게 한다.
                 if (len > 1e-6) {
-                    p.rotationY = Math.atan2(mx, mz);
+                    p.rotationY = turnToward(p.rotationY, Math.atan2(mx, mz), BOT_TURN_RATE * dt);
                 }
             } else {
                 // 회전은 시각용 → 클라 값 수용.
