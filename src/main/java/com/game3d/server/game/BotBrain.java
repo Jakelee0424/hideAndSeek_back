@@ -109,6 +109,9 @@ final class BotBrain {
      *  (운영 로그의 봇 계획이 전부 emote=null이었다). 프롬프트를 함께 고쳤으니 둘을 같이 볼 것. */
     private static final long SAY_COOLDOWN_MS = 18000;
 
+    /** 같은 감정을 다시 내도 되는 최소 간격(ms). 위 중복 필터의 예외 — 주석 참고. */
+    private static final long EMOTE_REPEAT_MS = 60000;
+
     /** 호출 중복 방지. 응답이 주기보다 느려도 요청이 쌓이지 않는다. */
     private final AtomicBoolean inFlight = new AtomicBoolean();
 
@@ -548,7 +551,14 @@ final class BotBrain {
                         long sayNow = System.currentTimeMillis();
                         // 같은 감정을 바로 연달아 반복하지 않고(사람 같지 않다), 최소 간격을 둔다
                         // (도배 방지). inFlight 덕에 이 블록은 직렬 실행이라 별도 동기화는 불필요.
-                        if (!emote.equals(lastEmote) && sayNow - lastSayAtMs >= SAY_COOLDOWN_MS) {
+                        //
+                        // ⚠️ 단, 같은 감정이라도 EMOTE_REPEAT_MS가 지나면 다시 낸다. 실측에서
+                        // llama-3.1-8b-instant가 계획의 70%에 emote를 달면서도 **전부 hello**만
+                        // 골라, 중복 필터에 걸려 한 판에 딱 한 번밖에 표현하지 못했다. 표현이
+                        // 단조로운 것보다 아예 없는 게 나쁘다 — 안 떠든 놈이 곧 AI다.
+                        boolean fresh = !emote.equals(lastEmote)
+                                || sayNow - lastSayAtMs >= EMOTE_REPEAT_MS;
+                        if (fresh && sayNow - lastSayAtMs >= SAY_COOLDOWN_MS) {
                             lastEmote = emote;
                             lastSayAtMs = sayNow;
                             // 사람 클라가 보내는 것과 같은 토큰으로 흘린다. 프론트 net/emotes.ts의
