@@ -361,6 +361,15 @@ public class Room {
     }
 
     /**
+     * 결말이 났는가(보관 시간과 무관). 끝난 방은 다시 시작되지 않으므로
+     * {@link RoomManager#getOrCreate}가 이걸 보고 새 방으로 갈아 끼운다 —
+     * 그러지 않으면 {@link #ENDED_KEEP_MS} 동안은 이전 판 상태 그대로 다시 들어가게 된다.
+     */
+    public boolean ended() {
+        return endedAtMs != 0;
+    }
+
+    /**
      * 사람이 아무도 없으면 빈 방. 봇은 인원으로 세지 않는다.
      * (봇을 세면 봇만 남은 방이 영영 안 치워지고 루프에 계속 남는다)
      */

@@ -98,8 +98,25 @@ public class RoomManager {
         return code != null && !code.isBlank() && code.equalsIgnoreCase(roomId);
     }
 
+    /**
+     * 방 얻기(없으면 생성). <b>끝난 방은 그대로 돌려주지 않고 새 방으로 갈아 끼운다.</b>
+     *
+     * Room에 상태 리셋이 없고 {@link PhaseTimeline#start}는 멱등이라, 끝난 방을 돌려주면
+     * 다음 판이 시작되지도 않은 채 이전 판의 solvedIds·openDoors를 그대로 물려받는다
+     * (감방·별관·배수관이 다 열린 채로 시작). {@link #remove}의 보관 시간({@code ENDED_KEEP_MS})은
+     * 엔딩 연출용이지, 다시 들어온 사람에게 끝난 판을 보여 주라는 뜻이 아니다.
+     *
+     * 갈아 끼운 방은 맵에서 빠지므로 루프가 더 이상 돌리지 않는다 — 아직 엔딩 화면을 보고
+     * 있던 사람은 스냅샷이 끊기지만, 이미 끝난 판이라 잃을 진행 상태가 없다.
+     */
     public Room getOrCreate(String roomId) {
-        return rooms.computeIfAbsent(roomId, id -> {
+        return rooms.compute(roomId, (id, cur) -> {
+            if (cur != null && !cur.ended()) {
+                return cur;
+            }
+            if (cur != null) {
+                log.info("방 {} 교체 — 끝난 판에 새로 입장했다(이전 판 상태를 물려주지 않는다)", id);
+            }
             boolean test = isTestRoom(id);
             if (test) {
                 log.info("테스트 방 {} 생성 — 즉시 시작 + 단축 단계({}초)", id, TEST_PHASES.totalMs() / 1000);
