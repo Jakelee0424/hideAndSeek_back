@@ -80,12 +80,8 @@ final class Collision {
      */
     private record Obst(double cx, double cz, double hx, double hz, double y0, double y1) {}
 
-    private static final Obst[] OBSTACLES = {
-        // 감방 소품: 이층 침상(서벽) + 변기(문 반대편 구석). 감방 rect·문 방향에서 딴 좌표.
-        new Obst(-36.6, 24, 0.5, 1.55, -1, 3), new Obst(-23.3, 26.7, 0.4, 0.4, -1, 3),   // 1-1
-        new Obst(-20.6, 24, 0.5, 1.55, -1, 3), new Obst(-7.3, 26.7, 0.4, 0.4, -1, 3),    // 1-2
-        new Obst(-36.6, 10, 0.5, 1.55, -1, 3), new Obst(-23.3, 7.3, 0.4, 0.4, -1, 3),    // 1-3
-        new Obst(-20.6, 10, 0.5, 1.55, -1, 3), new Obst(-7.3, 7.3, 0.4, 0.4, -1, 3),     // 1-4
+    // 감방 가구(침대·책상·관물대·가벽·변기)는 buildObstacles가 1·2층에 생성해 앞에 붙인다.
+    private static final Obst[] STATIC_OBSTACLES = {
         // 화장실: 변기·칸막이 열(북벽) + 세면대(서벽)
         new Obst(0, 26.8, 4.3, 0.55, -1, 3), new Obst(-5.4, 22.5, 0.35, 1.5, -1, 3),
         // 식당(동쪽 1/4은 조리실로 분리): 식탁 6(서편 2열×3행) + 조리실 분리벽(x18, 북끝 출입구만 개방) + 조리실 냉장고·조리대.
@@ -106,10 +102,10 @@ final class Collision {
         // 의무실: 침대 3 + 약장(동벽)
         new Obst(25.5, 8.3, 0.6, 1.3, -1, 3), new Obst(30, 8.3, 0.6, 1.3, -1, 3),
         new Obst(34.5, 8.3, 0.6, 1.3, -1, 3), new Obst(36.8, 10, 0.5, 1.5, -1, 3),
-        // 연병장(황량한 마당): 남서 구석의 벤치 셋 + 농구골대 기둥
+        // 연병장(황량한 마당): 남서 구석의 벤치 셋 + 농구골대 기둥(코트 서쪽 베이스라인, 프론트 COURT.hoop)
         new Obst(-37, -29.2, 2, 0.35, -1, 3), new Obst(-31, -29.2, 2, 0.35, -1, 3),
         new Obst(-41.3, -25, 0.35, 2, -1, 3),
-        new Obst(7.5, -12, 0.15, 0.15, -1, 3),
+        new Obst(-35.5, -16.3, 0.15, 0.15, -1, 3),
         // 세탁실 뒤 배수관(북벽, 최종 탈출구): 헤드월+관 입구 구조물(관통 방지). 프론트 OBSTACLES와 같은 값.
         new Obst(30, 29.75, 2.2, 0.25, -1, 3),
         // 배수관 우회 차단: 북쪽 순찰로(z28~30)를 서편에서 돌아오는 길을 세탁실 서벽 연장선(x22)에서 막는다.
@@ -132,6 +128,45 @@ final class Collision {
         new Obst((STAIR_X1 - 6) / 2, STAIR_Z1, (-6 - STAIR_X1) / 2, 0.1, 3, 99),
         new Obst(-6, 17, 0.2, 3, 3, 99),
     };
+
+    // 소품 충돌 최종본: 감방 가구(1·2층 생성) + STATIC_OBSTACLES.
+    private static final Obst[] OBSTACLES = buildObstacles();
+
+    /**
+     * 감방 가구(침대·책상·관물대·가벽·변기)를 1·2층에 생성해 STATIC_OBSTACLES 앞에 붙인다.
+     * "1·2층 통일" — 각 감방의 두 층에 같은 자리로 실체를 두되 발높이 구간만 다르다.
+     * ⚠️ 프론트 prisonLayout.cellFurniture / OBSTACLES와 같은 좌표·크기.
+     */
+    private static Obst[] buildObstacles() {
+        java.util.List<Obst> l = new java.util.ArrayList<>();
+        // 감방 rect + 문 방향: {x0, z0, x1, z1, doorS(1=남향 문)}
+        double[][] cells = {
+            {-38, 20, -22, 28, 1}, {-22, 20, -6, 28, 1}, // 1-1, 1-2 (남향 문)
+            {-38, 6, -22, 14, 0}, {-22, 6, -6, 14, 0},   // 1-3, 1-4 (북향 문)
+        };
+        final double f2y0 = FLOOR2_Y - 1, f2y1 = FLOOR2_Y + 3.5; // 2층 발높이 구간(3.5~8)
+        for (double[] c : cells) {
+            double x0 = c[0], z0 = c[1], x1 = c[2], z1 = c[3];
+            boolean doorS = c[4] == 1;
+            double din = doorS ? 1 : -1;
+            double zBack = doorS ? z1 : z0;
+            // {cx, cz, hx, hz} — cellFurniture와 같은 식(침대·책상·관물대·가벽·변기).
+            double[][] boxes = {
+                {x0 + 1.8, zBack - din * 2.9, 1.51875, 2.7}, // 침대(길이 5.4m : 폭 3.04m = 16:9)
+                {x0 + 5.0, zBack - din * 0.5, 1.3, 0.45},   // 책상(폭 2.6)
+                {x0 + 6.75, zBack - din * 0.45, 0.45, 0.25}, // 관물대(책상 바로 옆)
+                {x1 - 2.4, zBack - din * 1.8, 0.12, 1.8},   // 가벽
+                {x1 - 0.65, zBack - din * 1.4, 0.35, 0.3},  // 변기
+                {x1 - 0.45, zBack - din * 0.5, 0.25, 0.28}, // 세면대
+            };
+            for (double[] bx : boxes) {
+                l.add(new Obst(bx[0], bx[1], bx[2], bx[3], -1, 3));      // 1층
+                l.add(new Obst(bx[0], bx[1], bx[2], bx[3], f2y0, f2y1)); // 2층
+            }
+        }
+        l.addAll(java.util.Arrays.asList(STATIC_OBSTACLES));
+        return l.toArray(new Obst[0]);
+    }
 
     // 잠금 문: id가 solved에 있으면(열림) 충돌에서 제외 → 통과. 프론트 DOOR_BOXES와 일치.
     private record DoorBox(String id, double cx, double cz, double hx, double hz) {}
