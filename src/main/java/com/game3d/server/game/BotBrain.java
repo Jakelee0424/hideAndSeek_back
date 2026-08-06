@@ -86,6 +86,34 @@ final class BotBrain {
     /** 다음 펀치가 가능해지는 시각. 루프 스레드 전용. */
     private long punchReadyAtMs;
 
+    // ── 보복 (2026-08-06) ─────────────────────────────────────────────────────
+    // 예전엔 사거리 안에 사람이 들어오는 기회마다 확률로 <b>먼저</b> 쳤다. 협동 퍼즐 중에 아무
+    // 이유 없이 밀쳐지면 성가시고, 시연에서 심사위원이 잡은 캐릭터를 봇이 먼저 두들기는 그림이
+    // 된다. 이제 봇은 절대 먼저 치지 않는다 — 사람이 자기를 쳤을 때만 한 대 돌려준다.
+
+    /** 맞고 나서 되받아치기까지의 반응 지연(ms). 같은 tick에 즉답하면 사람이 아니라 기계로 보인다. */
+    private static final long REVENGE_DELAY_MIN_MS = 400;
+    private static final long REVENGE_DELAY_MAX_MS = 1200;
+
+    /** 맞은 뒤 이 시간이 지나면 없던 일로 한다. 한참 뒤에 뒤늦게 치면 앞뒤가 안 맞는다. */
+    private static final long REVENGE_WINDOW_MS = 8000;
+
+    /** 상대가 이보다 멀어지면 포기한다. 맵을 가로질러 쫓아다니면 게임을 방해한다. */
+    private static final double REVENGE_GIVEUP_R = 8.0;
+
+    /** 사거리의 이 비율까지만 다가간다. 딱 사거리에 맞춰 서면 한 발짝 흔들려도 헛방이 난다. */
+    private static final double REVENGE_CLOSE_F = 0.8;
+
+    /**
+     * 되갚아 줄 상대(나를 마지막으로 친 사람의 id). null이면 칠 이유가 없다 —
+     * <b>이 값이 서 있지 않는 한 봇은 주먹을 내지 않는다.</b>
+     * 기록({@link #tookPunch})도 소비({@link #wantsPunch})도 전부 루프 스레드다.
+     */
+    private String grudgeId;
+    /** 보복을 시도하는 구간 [grudgeFromMs, grudgeUntilMs). 앞은 반응 지연, 뒤는 유효 기간. */
+    private long grudgeFromMs;
+    private long grudgeUntilMs;
+
     /** 봇의 감정표현을 방으로 흘려보내는 통로. Room이 도배 제한·전송을 맡는다. */
     private final java.util.function.Consumer<String> onSay;
 
@@ -230,49 +258,112 @@ final class BotBrain {
     }
 
     /**
-     * 지금 앞에 있는 사람을 툭 칠지. Room.tick이 매 tick 묻고, true면 사람의 punch 요청과
+     * 사람에게 맞았다(루프 스레드, {@code Room.resolvePunches}에서 호출).
+     * <b>봇이 주먹을 내는 유일한 계기다</b> — 이 호출이 없으면 봇은 한 판 내내 아무도 치지 않는다.
+     *
+     * <p>보복할지는 <b>맞는 순간 한 번만</b> 굴린다({@code punchCfg.chance}). 매 tick 굴리면
+     * 기회가 쌓여 확률이 사실상 1이 되고, 그러면 "때리면 반드시 되받아치는 놈 = AI"가 되어
+     * 마지막 지목 투표가 너무 쉬워진다.
+     */
+    void tookPunch(String attackerId, long nowMs) {
+        if (punchCfg == null || !punchCfg.enabled() || attackerId == null) {
+            return;
+        }
+        if (nowMs < punchReadyAtMs) {
+            return; // 방금 되갚았다. 주고받는 난투로 번지지 않게 쉰다
+        }
+        if (java.util.concurrent.ThreadLocalRandom.current().nextDouble() >= punchCfg.chance()) {
+            return; // 이번엔 그냥 참는다
+        }
+        grudgeId = attackerId;
+        grudgeFromMs = nowMs + jitter(REVENGE_DELAY_MIN_MS, REVENGE_DELAY_MAX_MS);
+        grudgeUntilMs = grudgeFromMs + REVENGE_WINDOW_MS;
+        // 자물쇠를 "푸는 중"이었다면 그만큼 미룬다 — 보복하러 자리를 뜬 사이에 문이 저 혼자
+        // 열리면 자물쇠가 무관하게 풀리는 것으로 보인다.
+        if (solvingId != null) {
+            solvingUntilMs = Math.max(solvingUntilMs, grudgeUntilMs);
+        }
+    }
+
+    /**
+     * 지금 되갚을 상대. 맞은 적이 없거나, 반응 지연 전이거나, 유효 기간이 지났거나, 방을 나갔으면 null.
+     *
+     * <p>기간이 지났으면 여기서 잊는다 — 뒤늦게 쫓아가 치는 건 사람 같지 않다.
+     * steer·wantsPunch·revengeAim이 같은 tick에 나눠 부르지만 전부 루프 스레드라 순서는 안전하다.
+     */
+    private Player revengeTarget(Collection<Player> players, long nowMs) {
+        if (grudgeId == null) {
+            return null;
+        }
+        if (nowMs >= grudgeUntilMs) {
+            grudgeId = null;
+            return null;
+        }
+        if (nowMs < grudgeFromMs) {
+            return null; // 아직 반응하기 전
+        }
+        for (Player o : players) {
+            if (grudgeId.equals(o.id)) {
+                return o;
+            }
+        }
+        grudgeId = null; // 나갔다
+        return null;
+    }
+
+    /**
+     * 보복 대상 쪽을 보는 각도. 없으면 null이고 Room은 평소대로 이동 방향을 본다.
+     *
+     * <p>없으면 안 되는 이유: 봇의 시선은 <b>이동 방향</b>이라, 맞은 직후엔 넉백으로 밀리며
+     * 상대가 등 뒤에 있기 십상이다. 돌아서지 않으면 전방 콘 판정({@code Room.PUNCH_CONE_DOT})에
+     * 영영 안 걸려 보복이 성립하지 않는다.
+     */
+    Double revengeAim(Player self, Collection<Player> players, long nowMs) {
+        Player o = revengeTarget(players, nowMs);
+        if (o == null) {
+            return null;
+        }
+        double dx = o.x - self.x;
+        double dz = o.z - self.z;
+        if (Math.hypot(dx, dz) < 1e-4) {
+            return null; // 거의 겹쳐 있다 — 방향이 무의미
+        }
+        return Math.atan2(dx, dz);
+    }
+
+    /**
+     * 지금 되받아칠지. Room.tick이 매 tick 묻고, true면 사람의 punch 요청과
      * <b>같은 자리</b>({@code Player.requestPunch})에 세운다 — 사거리·전방 콘·쿨다운 판정은
      * 그대로 {@code Room.resolvePunches}가 사람과 똑같이 한다.
      *
-     * <p>여기서 보는 건 "칠 마음이 있는가"뿐이다: 사거리 안에 사람이 있고, 대충 그쪽을 보고 있고,
-     * 쉬는 시간이 지났고, 확률에 걸렸는가.
+     * <p>여기서 보는 건 "나를 친 그 사람이 지금 칠 자리에 있는가"뿐이다. 아니면 그냥 기다린다
+     * (다가가는 건 {@link #steer}, 돌아서는 건 {@link #revengeAim}이 한다).
      *
      * @param patrolling 순찰 중이면 안 친다. 사람은 순찰 중 폭행이 곧 적발이라 자정이 깎이는데
      *                   ({@code Room.punch}의 catchSuspicious), 봇이 팀에 그 벌을 안기면 안 된다.
      */
     boolean wantsPunch(Player self, Collection<Player> players, long nowMs, boolean patrolling) {
-        if (punchCfg == null || !punchCfg.enabled() || patrolling) {
+        if (punchCfg == null || !punchCfg.enabled() || patrolling || nowMs < punchReadyAtMs) {
             return false;
         }
-        if (punchReadyAtMs == 0) {
-            punchReadyAtMs = nowMs + punchCfg.minGapMs(); // 판 시작하자마자 치지는 않는다
+        Player o = revengeTarget(players, nowMs);
+        if (o == null) {
             return false;
         }
-        if (nowMs < punchReadyAtMs) {
-            return false;
+        double ex = o.x - self.x;
+        double ez = o.z - self.z;
+        double d = Math.hypot(ex, ez);
+        if (d > punchCfg.range() || d < 1e-4) {
+            return false; // 아직 멀다 — 다가가는 중이다
         }
         double fx = Math.sin(self.rotationY);
         double fz = Math.cos(self.rotationY);
-        for (Player o : players) {
-            if (o.bot) {
-                continue;
-            }
-            double ex = o.x - self.x;
-            double ez = o.z - self.z;
-            double d = Math.hypot(ex, ez);
-            if (d > punchCfg.range() || d < 1e-4) {
-                continue;
-            }
-            if ((ex * fx + ez * fz) / d < 0.5) {
-                continue; // 앞에 없다 — 뒤통수를 노리는 그림은 사람 같지 않다
-            }
-            if (java.util.concurrent.ThreadLocalRandom.current().nextDouble() >= punchCfg.chance()) {
-                return false; // 기회는 있었지만 안 쳤다. 다음 기회에 다시 굴린다
-            }
-            punchReadyAtMs = nowMs + punchCfg.minGapMs();
-            return true;
+        if ((ex * fx + ez * fz) / d < 0.5) {
+            return false; // 아직 덜 돌아섰다. 뒤통수를 치는 그림은 사람 같지 않다
         }
-        return false;
+        grudgeId = null; // 한 대로 끝낸다 — 계속 치면 난투가 된다
+        punchReadyAtMs = nowMs + punchCfg.minGapMs();
+        return true;
     }
 
     Goal goal() {
@@ -305,6 +396,23 @@ final class BotBrain {
     double[] steer(Player self, Collection<Player> players, Set<String> solved,
                    Set<String> blocked, long nowMs) {
         this.blocked = blocked;
+
+        // 맞았으면 하던 일을 잠깐 접고 그 사람 쪽으로 간다(유효 기간 안에서만).
+        // 길찾기(Nav)를 태우지 않는 이유: 상대는 방금 나를 칠 만큼 붙어 있었으니 몇 걸음 거리다.
+        // 멀어졌으면 쫓아가는 게 아니라 포기하는 게 맞다.
+        Player revenge = revengeTarget(players, nowMs);
+        if (revenge != null) {
+            double rx = revenge.x - self.x;
+            double rz = revenge.z - self.z;
+            double rd = Math.hypot(rx, rz);
+            if (rd > REVENGE_GIVEUP_R) {
+                grudgeId = null; // 너무 멀리 갔다 — 맵을 가로질러 쫓아다니지 않는다
+            } else if (rd > punchCfg.range() * REVENGE_CLOSE_F) {
+                return new double[] {rx / rd, rz / rd};
+            } else {
+                return STOP; // 사거리 안 — 서서 돌아선다(wantsPunch가 때를 정한다)
+            }
+        }
 
         // 자물쇠를 "푸는 중"이면 그 자리에 서 있는다. 시간이 차면 Room이 pollSolved로 수거한다.
         if (solvingId != null) {

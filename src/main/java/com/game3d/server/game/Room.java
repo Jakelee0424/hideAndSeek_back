@@ -768,6 +768,13 @@ public class Room {
                 }
                 target.applyKnockback(KNOCKBACK_SPEED * dirX, KNOCKBACK_SPEED * dirZ);
                 victimId = target.id;
+
+                // 봇을 쳤다면 그 봇에게 알린다 — 봇이 주먹을 내는 유일한 계기다(BotBrain.tookPunch).
+                // 봇은 먼저 치지 않으므로 이 줄이 없으면 봇은 한 판 내내 한 대도 안 친다.
+                // 때린 쪽이 봇이면 알리지 않는다: 사람 없는 봇끼리의 난투가 될 뿐이다.
+                if (!p.bot && target.bot && target.brain != null) {
+                    target.brain.tookPunch(p.id, nowMs);
+                }
             } else {
                 // 헛방: 넉백은 없지만 펀치 모션은 남들에게 보여야 한다.
                 dirX = fx;
@@ -990,7 +997,14 @@ public class Room {
                 // 730°)로 돌았다 — 180° 반전도 흔했다. 화면에서는 팽이처럼 제자리에서 도는 걸로
                 // 보인다("세탁기 돌듯이 돈다"는 신고의 정체). 사람은 마우스 시점 값이라 이런 튐이
                 // 없으므로, 봇만 각속도를 제한해 사람과 비슷한 속도로 돌게 한다.
-                if (len > 1e-6) {
+                //
+                // 예외 하나: 맞아서 되갚으려는 중이면 이동 방향이 아니라 <b>때린 사람</b>을 본다.
+                // 넉백에 밀리며 상대가 등 뒤로 가기 십상이라, 안 돌아서면 펀치 전방 콘에 영영
+                // 안 걸려 보복이 성립하지 않는다. 도는 속도는 평소와 같다.
+                Double aim = p.brain.revengeAim(p, players.values(), nowMs);
+                if (aim != null) {
+                    p.rotationY = turnToward(p.rotationY, aim, BOT_TURN_RATE * dt);
+                } else if (len > 1e-6) {
                     p.rotationY = turnToward(p.rotationY, Math.atan2(mx, mz), BOT_TURN_RATE * dt);
                 }
             } else {
