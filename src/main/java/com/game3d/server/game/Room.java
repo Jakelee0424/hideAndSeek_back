@@ -193,6 +193,13 @@ public class Room {
     /** 넉백 감쇠 시간상수(s). 매 tick v *= exp(-dt/TAU). 약 3*TAU(≈0.36s)면 사실상 멈춘다. */
     static final double KNOCKBACK_TAU = 0.12;
 
+    // 한 tick의 XZ 이동을 이 거리 이하 조각으로 나눠 조각마다 충돌을 푼다 — 프론트
+    // LocalPlayer.MAX_STEP_M과 이중 관리다. 원-AABB 밀어내기는 "도착점"만 보므로 한 tick(50ms)에
+    // 벽 두께(0.4m)보다 멀리 움직이면 벽을 통째로 관통한다. 달리기 10.8m/s면 tick당 0.54m라
+    // 실제로 얇은 벽을 뚫었고, 프론트는 서브스텝을 쓰는데 서버만 한 번에 풀어 좌표가 벌어졌다
+    // (증상: 벽 앞에서 제자리걸음 하다 서버의 관통 위치로 순간이동). 값은 가장 얇은 벽의 절반 이하.
+    private static final double MAX_STEP_M = 0.18;
+
     /** 채팅 한 줄의 최대 길이(자). 넘으면 자른다 — 거부하면 길게 쓴 사람은 이유도 모르고 말이 사라진다. */
     private static final int CHAT_MAX_LEN = 120;
     /** 채팅 최소 간격(ms). 도배 방지. 이 안에 또 보내면 조용히 버린다. */
@@ -925,14 +932,14 @@ public class Room {
 
             // 달리기 배수도 서버가 곱한다. 클라가 sprint를 위조해도 배수 자체는 서버 설정이 상한이다.
             double moveSpeed = sprint ? speed * props.sprintMultiplier() : speed;
-            p.x += mx * moveSpeed * dt;
-            p.z += mz * moveSpeed * dt;
+            double stepX = mx * moveSpeed * dt;
+            double stepZ = mz * moveSpeed * dt;
 
-            // 펀치 넉백: 외부 속도를 위치에 적분하고 지수 감쇠. 이동 입력과 독립적으로 밀린다.
+            // 펀치 넉백: 외부 속도를 이번 tick 변위에 더하고 지수 감쇠. 이동 입력과 독립적으로 밀린다.
             // (사람·봇 공통 — 봇도 맞으면 밀린다.) 아주 작아지면 0으로 끊어 미세 표류를 막는다.
             if (p.kx != 0 || p.kz != 0) {
-                p.x += p.kx * dt;
-                p.z += p.kz * dt;
+                stepX += p.kx * dt;
+                stepZ += p.kz * dt;
                 p.kx *= kbDecay;
                 p.kz *= kbDecay;
                 if (Math.abs(p.kx) < 0.01 && Math.abs(p.kz) < 0.01) {
@@ -943,9 +950,18 @@ public class Room {
 
             // 벽/소품 충돌 해석(열린 감방문은 통과, 발높이로 층 판정). 프론트 예측과 동일 로직.
             // XZ 밀어내기라 점프해도 장애물을 넘지 못한다 — 프론트 collision.ts와 이중 관리.
-            double[] r = Collision.resolve(p.x, p.z, p.y - Player.GROUND_Y, openDoors);
-            p.x = r[0];
-            p.z = r[1];
+            // ⚠️ 이동을 MAX_STEP_M 이하 조각으로 나눠 조각마다 푼다 — 한 번에 밀어 넣으면 달리기
+            //    tick 이동(0.54m)이 벽 두께를 넘겨 관통한다. 프론트 LocalPlayer 서브스텝과 동일 규약.
+            double feetY = p.y - Player.GROUND_Y;
+            double dist = Math.hypot(stepX, stepZ);
+            int steps = Math.max(1, (int) Math.ceil(dist / MAX_STEP_M));
+            for (int s = 0; s < steps; s++) {
+                p.x += stepX / steps;
+                p.z += stepZ / steps;
+                double[] r = Collision.resolve(p.x, p.z, feetY, openDoors);
+                p.x = r[0];
+                p.z = r[1];
+            }
 
             // 수직: 바닥은 그 좌표의 지지면(1층 0 / 계단 램프 / 2층 FLOOR2_Y). STEP_UP 이하의
             // 턱은 걸어서 스냅해 오르내린다(계단). 접지 중 점프 의도가 있으면 발사, 그 뒤엔
