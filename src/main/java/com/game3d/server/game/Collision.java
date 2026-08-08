@@ -491,20 +491,66 @@ final class Collision {
         if (d2 >= r * r) {
             return;
         }
+        double px;
+        double pz;
         if (d2 > 1e-8) {
             double d = Math.sqrt(d2);
             double push = (r - d) / d;
-            p[0] = x + dx * push;
-            p[1] = z + dz * push;
+            px = x + dx * push;
+            pz = z + dz * push;
         } else {
             double penX = hx + r - Math.abs(x - cx);
             double penZ = hz + r - Math.abs(z - cz);
             if (penX < penZ) {
-                p[0] = x + Math.signum(x - cx) * penX;
+                px = x + Math.signum(x - cx) * penX;
+                pz = z;
             } else {
-                p[1] = z + Math.signum(z - cz) * penZ;
+                px = x;
+                pz = z + Math.signum(z - cz) * penZ;
             }
         }
+        if (!inBounds(px, pz)) {
+            // 밀어낸 자리가 맵 밖이면 그쪽으로 내보내지 않는다(exitInBounds 주석 참고).
+            double[] e = exitInBounds(x, z, cx, cz, hx, hz, r);
+            px = e[0];
+            pz = e[1];
+        }
+        p[0] = px;
+        p[1] = pz;
+    }
+
+    private static boolean inBounds(double x, double z) {
+        return x >= -BOUND_X && x <= BOUND_X && z >= -BOUND_Z && z <= BOUND_Z;
+    }
+
+    /**
+     * 맵 안에 남는 출구로 내보낸다. 네 면(±x·±z) 중 경계를 안 넘는 것 가운데 가장 가까운 쪽.
+     *
+     * <p>⚠️ 왜 필요한가 — <b>담장에 박힌 소품 뒤에는 반지름만큼의 여유가 담장 밖에만 있다.</b>
+     * 연병장 벤치 셋(남벽 둘 · 서벽 하나)이 그렇다: 벤치와 담장 사이로 밀린 원은 가장 가까운
+     * 면 기준으로 경계 밖(예: z −29.95, 경계는 −29.6)으로 나가는데, 다음 tick의 경계 clamp가
+     * 그 자리를 도로 벤치 안으로 집어넣는다 → <b>밀림 ↔ clamp 무한 왕복</b>. 그동안 플레이어는
+     * 그 방향으로 한 발도 못 나간다("연병장에서 갇혀 이동이 안 된다"의 정체).
+     * 프론트 collision.ts와 같은 규칙 — 한쪽만 고치면 러버밴딩이 난다.
+     */
+    private static double[] exitInBounds(double x, double z, double cx, double cz,
+                                         double hx, double hz, double r) {
+        double[][] cands = {
+            {cx + hx + r, z}, {cx - hx - r, z}, {x, cz + hz + r}, {x, cz - hz - r},
+        };
+        double[] best = null;
+        double bestD = Double.MAX_VALUE;
+        for (double[] c : cands) {
+            if (!inBounds(c[0], c[1])) {
+                continue;
+            }
+            double d = Math.hypot(c[0] - x, c[1] - z);
+            if (d < bestD) {
+                bestD = d;
+                best = c;
+            }
+        }
+        return best != null ? best : new double[] {x, z}; // 이론상 없음
     }
 
     private static double clamp(double v, double lo, double hi) {
