@@ -106,7 +106,7 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-    participant GL as GameLoop (@Scheduled 50ms)
+    participant GL as GameLoop · 50ms 주기
     participant R as Room
     participant B as BotBrain
     participant C as Collision
